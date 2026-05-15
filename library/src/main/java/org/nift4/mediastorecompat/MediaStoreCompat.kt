@@ -1437,6 +1437,35 @@ object MediaStoreCompat {
         }
     }
 
+    /**
+     * Scans a media file.
+     *
+     * If a file was edited with [openOutputStream] or similar methods, the system may not
+     * automatically rescan the file on Android 11 or earlier. Calling this method manually helps
+     * the system maintain an up-to-date mapping of files and metadata.
+     *
+     * This method is blocking and should hence be called on a background thread.
+     *
+     * This wrapper fixes an issue in Android versions before 10 where playlist files would not be
+     * scanned by [MediaScannerConnection.scanFile], by scanning the whole volume instead, if
+     * scanning a playlist is requested.
+     *
+     * @see MediaScannerConnection.scanFile
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun scanFile(context: Context, uri: Uri, mediaFile: File? = null) {
+        var mediaFile = mediaFile
+        queryMissing(context, uri, null, null,
+            null, mediaFile, needsOwner = false, needsType = false,
+            needsIsDownload = false, needsFile = true
+        ) { _, _, _, mediaFileH ->
+            mediaFile = mediaFileH
+        }
+        scanFile(context, mediaFile!!.absolutePath)
+        return
+    }
+
     private fun scanFileOrThrow(context: Context, file: String): Uri? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             return scanFileInternal(context, file)
@@ -4103,14 +4132,7 @@ object MediaStoreCompat {
                 throw IllegalStateException("update() failed")
             return
         }
-        var mediaFile = mediaFile
-        queryMissing(context, uri, null, null,
-            null, mediaFile, needsOwner = false, needsType = false,
-            needsIsDownload = false, needsFile = true
-        ) { _, _, _, mediaFileH ->
-            mediaFile = mediaFileH
-        }
-        scanFile(context, mediaFile!!.absolutePath)
+        scanFile(context, uri, mediaFile)
         return
     }
 
