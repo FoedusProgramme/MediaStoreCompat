@@ -6,6 +6,7 @@ import kotlin.math.max
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.publish)
+    id("signing")
 }
 
 android {
@@ -62,6 +63,9 @@ android {
             }
         }
     }
+}
+signing {
+    useGpgCmd()
 }
 
 mavenPublishing {
