@@ -92,6 +92,11 @@ mavenPublishing {
                 name.set("Nick")
                 url.set("https://github.com/nift4/")
             }
+            developer {
+                id.set("android")
+                name.set("Portions (C) 2007 The Android Open Source Project")
+                url.set("https://source.android.com/")
+            }
         }
         scm {
             url.set("https://github.com/FoedusProgramme/MediaStoreCompat")
