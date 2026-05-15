@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--  Copyright (C) 2009 The Android Open Source Project
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+ -->
+
+<resources xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string name="permission_more_thumb" msgid="1938863829470531577">"{count,plural, =1{+<xliff:g id="COUNT_0">^1</xliff:g>}other{+<xliff:g id="COUNT_1">^1</xliff:g>}}"</string>
+    <string name="permission_more_text" msgid="2471785045095597753">"{count,plural, =1{Plus <xliff:g id="COUNT_0">^1</xliff:g> extra item}other{Plus <xliff:g id="COUNT_1">^1</xliff:g> extra items}}"</string>
+    <string name="permission_trash_audio" msgid="6554672354767742206">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit audiobestand naar de prullenbak te verplaatsen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> audiobestanden naar de prullenbak te verplaatsen?}}"</string>
+    <string name="permission_progress_trash_audio" msgid="3116279868733641329">"{count,plural, =1{Audiobestand naar prullenbak verplaatsen…}other{<xliff:g id="COUNT">^1</xliff:g> audiobestanden naar prullenbak verplaatsen…}}"</string>
+    <string name="permission_trash_video" msgid="7555850843259959642">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze video naar de prullenbak te verplaatsen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> video\'s naar de prullenbak te verplaatsen?}}"</string>
+    <string name="permission_progress_trash_video" msgid="4637821778329459681">"{count,plural, =1{Video naar prullenbak verplaatsen…}other{<xliff:g id="COUNT">^1</xliff:g> video\'s naar prullenbak verplaatsen…}}"</string>
+    <string name="permission_trash_image" msgid="3333128084684156675">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze foto naar de prullenbak te verplaatsen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> foto\'s naar de prullenbak te verplaatsen?}}"</string>
+    <string name="permission_progress_trash_image" msgid="3063857679090024764">"{count,plural, =1{Foto naar prullenbak verplaatsen…}other{<xliff:g id="COUNT">^1</xliff:g> foto\'s naar prullenbak verplaatsen…}}"</string>
+    <string name="permission_trash_generic" msgid="5545420534785075362">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit item naar de prullenbak te verplaatsen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> items naar de prullenbak te verplaatsen?}}"</string>
+    <string name="permission_progress_trash_generic" msgid="7815124979717814057">"{count,plural, =1{Item naar prullenbak verplaatsen…}other{<xliff:g id="COUNT">^1</xliff:g> items naar prullenbak verplaatsen…}}"</string>
+    <string name="permission_untrash_audio" msgid="8404597563284002472">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit audiobestand uit de prullenbak te halen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> audiobestanden uit de prullenbak te halen?}}"</string>
+    <string name="permission_progress_untrash_audio" msgid="2775372344946464508">"{count,plural, =1{Audiobestand uit prullenbak halen…}other{<xliff:g id="COUNT">^1</xliff:g> audiobestanden uit prullenbak halen…}}"</string>
+    <string name="permission_untrash_video" msgid="3178914827607608162">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze video uit de prullenbak te halen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> video\'s uit de prullenbak te halen?}}"</string>
+    <string name="permission_progress_untrash_video" msgid="5500929409733841567">"{count,plural, =1{Video uit prullenbak halen…}other{<xliff:g id="COUNT">^1</xliff:g> video\'s uit prullenbak halen…}}"</string>
+    <string name="permission_untrash_image" msgid="3397523279351032265">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze foto uit de prullenbak te halen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> foto\'s uit de prullenbak te halen?}}"</string>
+    <string name="permission_progress_untrash_image" msgid="5295061520504846264">"{count,plural, =1{Foto uit prullenbak halen…}other{<xliff:g id="COUNT">^1</xliff:g> foto\'s uit prullenbak halen…}}"</string>
+    <string name="permission_untrash_generic" msgid="2118366929431671046">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit item uit de prullenbak te halen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> items uit de prullenbak te halen?}}"</string>
+    <string name="permission_progress_untrash_generic" msgid="1489511601966842579">"{count,plural, =1{Item uit prullenbak halen…}other{<xliff:g id="COUNT">^1</xliff:g> items uit prullenbak halen…}}"</string>
+    <string name="permission_delete_audio" msgid="3326674742892796627">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit audiobestand te verwijderen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> audiobestanden te verwijderen?}}"</string>
+    <string name="permission_progress_delete_audio" msgid="1734871539021696401">"{count,plural, =1{Audiobestand verwijderen…}other{<xliff:g id="COUNT">^1</xliff:g> audiobestanden verwijderen…}}"</string>
+    <string name="permission_delete_video" msgid="604024971828349279">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze video te verwijderen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> video\'s te verwijderen?}}"</string>
+    <string name="permission_progress_delete_video" msgid="1846702435073793157">"{count,plural, =1{Video verwijderen…}other{<xliff:g id="COUNT">^1</xliff:g> video\'s verwijderen…}}"</string>
+    <string name="permission_delete_image" msgid="3109056012794330510">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan deze foto te verwijderen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> foto\'s te verwijderen?}}"</string>
+    <string name="permission_progress_delete_image" msgid="8580517204901148906">"{count,plural, =1{Foto verwijderen…}other{<xliff:g id="COUNT">^1</xliff:g> foto\'s verwijderen…}}"</string>
+    <string name="permission_delete_generic" msgid="7891939881065520271">"{count,plural, =1{<xliff:g id="APP_NAME_0">^1</xliff:g> toestaan dit item te verwijderen?}other{<xliff:g id="APP_NAME_1">^1</xliff:g> toestaan <xliff:g id="COUNT">^2</xliff:g> items te verwijderen?}}"</string>
+    <string name="permission_progress_delete_generic" msgid="6709118146245087898">"{count,plural, =1{Item verwijderen…}other{<xliff:g id="COUNT">^1</xliff:g> items verwijderen…}}"</string>
+</resources>

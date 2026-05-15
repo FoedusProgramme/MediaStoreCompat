@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <!--
+        Disabling requestLegacyExternalStorage, hence enabling scoped storage on Android 10, would
+        be an awful idea for user experience:
+        - It would start requiring SAF for reading & writing non-media files on external storage,
+          and for reading non-media files on removable storage. This is a problem because the
+          definition of non-media files includes subtitle, lyric and playlist files in Android 10.
+        - There's no way even for media files to batch-edit files. All other Android versions have
+          some way to create one request for a batch of music files (at least one request per volume
+          which is often still fine for UX). But Android Q requires one request per file, which
+          means deleting 2000 files requires the user to click "Allow" 2000 times.
+        - Unlike Android R's MediaStore that includes every file (if you include pending), Android Q
+          can still suffer from files not being indexed. If that happens, you as app have no way to
+          recover if requestLegacyExternalStorage is false, because File API access is denied.
+        - Android Q has a bug that requires you to be able to edit song file when adding it to
+          playlist which a music player would commonly not have under the scoped storage model.
+          requestLegacyExternalStorage indirectly workarounds this bug because you always have write
+          access (this bug was fixed in Android R).
+
+        Only apps that are so simple they don't need this library would be usable with
+        requestLegacyExternalStorage="false" without UX regressions, and considering using
+        requestLegacyExternalStorage="false" has no advantages at all, enforce it to be enabled for
+        this library.
+    -->
+    <application android:requestLegacyExternalStorage="true" tools:ignore="UnusedAttribute">
+        <activity android:name=".WriteRequestActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:allowTaskReparenting="false"
+            android:exported="false" />
+        <activity android:name=".DeleteRequestActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/PickerDialogTheme"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:allowTaskReparenting="false"
+            android:exported="false" />
+        <activity android:name=".ManagerRequestActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:allowTaskReparenting="false"
+            android:exported="false"
+            tools:targetApi="30" />
+    </application>
+</manifest>

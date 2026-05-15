@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".TestActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:allowTaskReparenting="false"
+            android:exported="true"
+            tools:ignore="UnusedAttribute">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
