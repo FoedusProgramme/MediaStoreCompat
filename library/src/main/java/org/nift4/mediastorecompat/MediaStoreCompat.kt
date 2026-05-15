@@ -354,6 +354,83 @@ object MediaStoreCompat {
                         SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) < 22)
 
     /**
+     * Get a media [Uri] for a file, scanning the file if none is found. This can fail for the
+     * reasons described in [scanFile].
+     */
+    fun getMediaUriForFile(context: Context, file: String): Uri {
+        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.contentResolver.query(
+                FILES_EXTERNAL_CONTENT_URI,
+                arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.MEDIA_TYPE,
+                    MediaStore.Files.FileColumns.IS_DOWNLOAD,
+                    MediaStore.Files.FileColumns.VOLUME_NAME,
+                ),
+                Bundle().apply {
+                    putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                        "${MediaStore.Files.FileColumns.DATA} = ?")
+                    putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(file))
+                    putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                },
+                null
+            )
+        } else {
+            context.contentResolver.query(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    @Suppress("deprecation")
+                    MediaStore.setIncludePending(FILES_EXTERNAL_CONTENT_URI)
+                else FILES_EXTERNAL_CONTENT_URI,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    arrayOf(
+                        MediaStore.Files.FileColumns._ID,
+                        MediaStore.Files.FileColumns.MEDIA_TYPE,
+                        MediaStore.Files.FileColumns.IS_DOWNLOAD,
+                        MediaStore.Files.FileColumns.VOLUME_NAME,
+                    )
+                else arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.MEDIA_TYPE
+                ),
+                "${MediaStore.Files.FileColumns.DATA} = ?",
+                arrayOf(file),
+                null
+            )
+        }
+        cursor.use { _ ->
+            // Index might be missing (Q-).
+            if (cursor == null || !cursor.moveToFirst())
+                return scanFileOrThrow(context, file)
+                    ?: throw IllegalStateException("Failed to scan this file")
+            val id = cursor.getLong(
+                cursor.getColumnIndexOrThrow(
+                    MediaStore.Files.FileColumns._ID
+                )
+            )
+            val mediaType = cursor.getInt(
+                cursor.getColumnIndexOrThrow(
+                    MediaStore.Files.FileColumns.MEDIA_TYPE
+                )
+            )
+            val isDownload = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) cursor.getInt(
+                cursor.getColumnIndexOrThrow(
+                    MediaStore.Files.FileColumns.IS_DOWNLOAD
+                )
+            ) == 1 else false
+            val volumeName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                cursor.getString(
+                    cursor.getColumnIndexOrThrow(
+                        MediaStore.MediaColumns.VOLUME_NAME
+                    )
+                ) else null
+            return ContentUris.withAppendedId(getBaseUriForMediaType(volumeName,
+                mediaType, if (mediaType == MEDIA_TYPE_NONE ||
+                    mediaType == MEDIA_TYPE_DOCUMENT) isDownload else false), id)
+        }
+    }
+
+    /**
      * Similar to the original method, this backport performs a permission check to ensure the
      * returned Uri is accessible using a persisted grant. If this is not relevant, consider using
      * [getDocumentUriEx] instead and set the resolvePermissions mode to [ResolvePermissions.Never].
@@ -1073,6 +1150,11 @@ object MediaStoreCompat {
      *
      * If you're not sure about [mimeType], set `null` to let the library automatically determine it.
      *
+     * If the volume provided is `null`, [fileNameAndPath] must either be an absolute path pointing
+     * to a mounted volume, or the device's internal storage will be used by default. If there is a
+     * volume provided, [fileNameAndPath]  may either be an absolute path pointing to that volume,
+     * or a relative path from the volume's root.
+     *
      * This method assumes that, on Android 11 or later, a file will be created in an appropriate
      * directory allowed by MediaStore, or [Manifest.permission.MANAGE_EXTERNAL_STORAGE] is declared
      * in manifest (if an unsupported folder is requested, [createWriteRequest] will then ask for
@@ -1105,12 +1187,30 @@ object MediaStoreCompat {
      */
     @JvmStatic
     @JvmOverloads
-    fun needRequestCreate(context: Context, volumeCompat: StorageVolumeCompat,
-                          fileNameAndPath: String, mimeType: String? = null,
+    fun needRequestCreate(context: Context, fileNameAndPath: String,
+                          volumeCompat: StorageVolumeCompat? = null, mimeType: String? = null,
                           needsMkdirs: Boolean? = null, isManager: Boolean? = null,
                           volumesCache: List<StorageVolumeCompat>? = null,
                           persistedUriPermissionsCache: List<UriPermission>? = null): RequestToken? {
-        val fileIn = File(fileNameAndPath)
+        var fileIn = File(fileNameAndPath)
+        var volumesCache = volumesCache
+        var volumeCompat = volumeCompat
+        if (fileIn.isAbsolute) {
+            if (volumeCompat != null) {
+                fileIn = fileIn.relativeTo(volumeCompat.requireCanonicalDirectory())
+                if (fileIn.path.startsWith("../")) {
+                    throw IllegalArgumentException("$fileIn not inside $volumeCompat")
+                }
+            } else {
+                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                volumeCompat = StorageManagerCompat.getVolumeForPath(volumesCache, fileIn)
+                fileIn = fileIn.relativeTo(volumeCompat.requireCanonicalDirectory())
+            }
+        } else if (volumeCompat == null) {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            volumeCompat = volumesCache.find { it.isPrimary || it.isEmulated }
+                ?: throw IllegalStateException("Internal storage appears to be unavailable at this moment")
+        }
         var (file, mimeTypeReal) = computeFileAndMime(fileIn, mimeType)
         val folderName = file.path.split('/', limit = 2)[0]
         @SuppressLint("NewApi") // folders array is fine to use in this isolated case
@@ -1329,42 +1429,46 @@ object MediaStoreCompat {
      */
     @JvmStatic
     fun scanFile(context: Context, file: String): Uri? {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                return scanFileInternal(context, file)
-            }
-            val ext = File(file).extension
-            val isPlaylist = getMediaTypeForMime(MimeTypeMap.getSingleton()
-                .getMimeTypeFromExtension(ext)) == MEDIA_TYPE_PLAYLIST
-            if (!isPlaylist) {
-                return scanFileInternal(context, file)
-            }
-            scanFileInternal(context, file)?.let {
-                return it // if it works, it sure was worth the try, but usually it fails
-            }
-            scanVolumeLegacy(context, 5 * 60)
-            return context.contentResolver.query(
-                FILES_EXTERNAL_CONTENT_URI,
-                arrayOf(
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.MEDIA_TYPE
-                ),
-                "${MediaStore.Files.FileColumns.DATA} = ?",
-                arrayOf(file),
-                null
-            ).use {
-                if (it != null && it.moveToFirst())
-                    ContentUris.withAppendedId(
-                        getBaseUriForMediaType(
-                            VOLUME_EXTERNAL,
-                            it.getInt(1)
-                        ), it.getLong(0)
-                    )
-                else null
-            }
+        return try {
+            scanFileOrThrow(context, file)
         } catch (e: Exception) {
             Log.w(TAG, "failed to scan", e)
-            return null
+            null
+        }
+    }
+
+    private fun scanFileOrThrow(context: Context, file: String): Uri? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return scanFileInternal(context, file)
+        }
+        val ext = File(file).extension
+        val isPlaylist = getMediaTypeForMime(MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(ext)) == MEDIA_TYPE_PLAYLIST
+        if (!isPlaylist) {
+            return scanFileInternal(context, file)
+        }
+        scanFileInternal(context, file)?.let {
+            return it // if it works, it sure was worth the try, but usually it fails
+        }
+        scanVolumeLegacy(context, 5 * 60)
+        return context.contentResolver.query(
+            FILES_EXTERNAL_CONTENT_URI,
+            arrayOf(
+                MediaStore.Files.FileColumns._ID,
+                MediaStore.Files.FileColumns.MEDIA_TYPE
+            ),
+            "${MediaStore.Files.FileColumns.DATA} = ?",
+            arrayOf(file),
+            null
+        ).use {
+            if (it != null && it.moveToFirst())
+                ContentUris.withAppendedId(
+                    getBaseUriForMediaType(
+                        VOLUME_EXTERNAL,
+                        it.getInt(1)
+                    ), it.getLong(0)
+                )
+            else null
         }
     }
 
@@ -2488,7 +2592,7 @@ object MediaStoreCompat {
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         val isManager = isManager ?: isManager(context)
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-        val path = mediaFile.relativeTo(volume.requireCanonicalDirectory()).path
+        val path = mediaFile.toRelativeString(volume.requireCanonicalDirectory())
         val inputStream = openInputStream(context, uri, ownerPackageName,
             mediaType, mediaFile, isManager, volumesCache, persistedUriPermissionsCache)!!
         var newUri: Uri? = null
@@ -2498,7 +2602,7 @@ object MediaStoreCompat {
                 mediaFile, isManager, volumesCache, persistedUriPermissionsCache)
             step = 1
             newUri = create(
-                context, volume, path, null, relatedUri = uri, isManager,
+                context, path, volume, null, relatedUri = uri, isManager,
                 volumesCache, persistedUriPermissionsCache
             )!!
             step = 2
@@ -2562,6 +2666,9 @@ object MediaStoreCompat {
      *
      * Parent folders of the new file will be automatically created if required.
      *
+     * [newPathAndName] may be absolute on the mounted volume the file already resides on, or
+     * relative to the root of the file's volume.
+     *
      * Copying move is the act of creating the target file, opening the source file for read, then
      * reading from source and writing to target until all contents are copied, and then deleting
      * the source file. Because efficient move/rename is often the only operation requiring
@@ -2589,7 +2696,7 @@ object MediaStoreCompat {
     @JvmStatic
     @JvmOverloads
     // TODO: can i do format 0x3001 trick on modern android to move files where they don't belong?
-    fun efficientMove(context: Context, uri: Uri, newRelativePath: String,
+    fun efficientMove(context: Context, uri: Uri, newPathAndName: String,
                       ownerPackageName: String? = null, mediaType: Int? = null,
                       isDownload: Boolean? = null, mediaFile: File? = null,
                       isManager: Boolean? = null,
@@ -2597,10 +2704,22 @@ object MediaStoreCompat {
                       persistedUriPermissionsCache: List<UriPermission>? = null) {
         if (uri.authority?.equals(MediaStore.AUTHORITY) == false)
             throw IllegalArgumentException("Expected a MediaStore uri: $uri")
+        var volumesCache = volumesCache
         var ownerPackageName = ownerPackageName
         var mediaType = mediaType
         var isDownload = isDownload
         var mediaFile = mediaFile
+        val newPathAndNameFile = File(newPathAndName)
+        val newRelativePath: String
+        var volume: StorageVolumeCompat? = null
+        if (newPathAndNameFile.isAbsolute) {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            newRelativePath = newPathAndNameFile
+                .toRelativeString(volume.requireCanonicalDirectory())
+        } else {
+            newRelativePath = newPathAndName
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             var isManager = isManager
             if (!supportsWriteRequestForSidecar()) {
@@ -2614,7 +2733,7 @@ object MediaStoreCompat {
             queryMissing(
                 context, uri, ownerPackageName, mediaType, isDownload,
                 mediaFile, needsOwner = !supportsWriteRequestForSidecar(), needsFile = forceMove ||
-                        isAffectedByMoveGenericVolumeBug(), needsType = !forceMove
+                        isAffectedByMoveGenericVolumeBug() || volume != null, needsType = !forceMove
                         || !supportsWriteRequestForSidecar(),
                 needsIsDownload = !forceMove
             ) { ownerPackageNameH, mediaTypeH, isDownloadH, mediaFileH ->
@@ -2623,12 +2742,15 @@ object MediaStoreCompat {
                 isDownload = isDownloadH
                 mediaFile = mediaFileH
             }
+            if (volume != null && mediaFile!!.toRelativeString(volume
+                .requireCanonicalDirectory()).startsWith("../")) {
+                throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
+            }
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_PLAYLIST
                         && mediaType != MEDIA_TYPE_SUBTITLE) || isManager!!
                 || ownerPackageName == context.packageName) {
                 if (forceMove) {
-                    val volumesCache =
-                        volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                    volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                     val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                     if (volume.requireCanonicalDirectory().resolve(folderName).isDirectory) {
                         val absTarget = volume.requireCanonicalDirectory().resolve(newRelativePath)
@@ -2649,8 +2771,7 @@ object MediaStoreCompat {
                     var uri = uri
                     val msv = if (isAffectedByMoveGenericVolumeBug()) {
                         // https://issuetracker.google.com/issues/350540990
-                        val volumesCache =
-                            volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                         val volume =
                             StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                         volume.mediaStoreVolumeName
@@ -2692,8 +2813,12 @@ object MediaStoreCompat {
             isDownload = isDownloadH
             mediaFile = mediaFileH
         }
-        val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-        val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+        if (volume != null && mediaFile!!.toRelativeString(volume
+                .requireCanonicalDirectory()).startsWith("../")) {
+            throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
+        }
+        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+        volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         if (!mediaFile.exists()) {
             if (mediaType == MEDIA_TYPE_PLAYLIST) { // Abstract playlists _can_ move
                 context.checkGrantSelfUriPermission(@Suppress("deprecation")
@@ -2937,6 +3062,9 @@ object MediaStoreCompat {
      * rewriting the data on disk). Only possible within a single volume because it'd be a copying
      * move otherwise. If this returns true, use [createWriteRequest] to gain permission.
      *
+     * [newPathWithoutName] may be absolute on the mounted volume the file already resides on, or
+     * relative to the root of the file's volume.
+     *
      * Copying move is the act of creating the target file, opening the source file for read, then
      * reading from source and writing to target until all contents are copied, and then deleting
      * the source file. Because efficient move/rename is often the only operation requiring
@@ -2955,7 +3083,7 @@ object MediaStoreCompat {
      */
     @JvmStatic
     @JvmOverloads
-    fun needRequestEfficientMove(context: Context, uri: Uri, newParent: String,
+    fun needRequestEfficientMove(context: Context, uri: Uri, newPathWithoutName: String,
                                  ownerPackageName: String? = null, mediaType: Int? = null,
                                  isDownload: Boolean? = null, mediaFile: File? = null,
                                  isManager: Boolean? = null,
@@ -2966,6 +3094,17 @@ object MediaStoreCompat {
         var isDownload = isDownload
         var mediaFile = mediaFile
         var volumesCache = volumesCache
+        val newPathWithoutNameFile = File(newPathWithoutName)
+        val newParent: String
+        var volume: StorageVolumeCompat? = null
+        if (newPathWithoutNameFile.isAbsolute) {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            newParent = newPathWithoutNameFile.toRelativeString(
+                volume.requireCanonicalDirectory())
+        } else {
+            newParent = newPathWithoutName
+        }
         val newRelative = File(newParent)
         val rootFolder = newRelative.path.split('/', limit = 2)[0]
         val forceMove = Build.VERSION.SDK_INT == Build.VERSION_CODES.R &&
@@ -2979,6 +3118,10 @@ object MediaStoreCompat {
             // We may get those for free due to type check query despite needs flags being false
             ownerPackageName = ownerPackageNameH
             isDownload = isDownloadH
+        }
+        if (volume != null && mediaFile!!.toRelativeString(volume
+                .requireCanonicalDirectory()).startsWith("../")) {
+            throw IllegalArgumentException("$newPathWithoutName is not inside current $volume ($mediaFile)")
         }
         val invalidPath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 !folders[mediaType]!!.contains(rootFolder) && !forceMove
@@ -3294,6 +3437,11 @@ object MediaStoreCompat {
      *
      * If you're not sure about [mimeType], set `null` to let the library automatically determine it.
      *
+     * If the volume provided is `null`, [fileNameAndPath] must either be an absolute path pointing
+     * to a mounted volume, or the device's internal storage will be used by default. If there is a
+     * volume provided, [fileNameAndPath]  may either be an absolute path pointing to that volume,
+     * or a relative path from the volume's root.
+     *
      * `null` is returned if there is some issue that prevented creating a [MediaStore] row. In many
      * other cases of failure, this method will throw with more details on what went wrong.
      *
@@ -3316,11 +3464,29 @@ object MediaStoreCompat {
     @JvmStatic
     @JvmOverloads
     // TODO: can i do format 0x3001 trick on modern android to create files where they don't belong?
-    fun create(context: Context, volume: StorageVolumeCompat, relativePath: String,
+    fun create(context: Context, fileNameAndPath: String, volume: StorageVolumeCompat? = null,
                mimeType: String? = null, relatedUri: Uri? = null, isManager: Boolean? = null,
                volumesCache: List<StorageVolumeCompat>? = null,
                persistedUriPermissionsCache: List<UriPermission>? = null): Uri? {
-        val fileIn = File(relativePath)
+        var fileIn = File(fileNameAndPath)
+        var volumesCache = volumesCache
+        var volume = volume
+        if (fileIn.isAbsolute) {
+            if (volume != null) {
+                fileIn = fileIn.relativeTo(volume.requireCanonicalDirectory())
+                if (fileIn.path.startsWith("../")) {
+                    throw IllegalArgumentException("$fileIn not inside $volume")
+                }
+            } else {
+                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                volume = StorageManagerCompat.getVolumeForPath(volumesCache, fileIn)
+                fileIn = fileIn.relativeTo(volume.requireCanonicalDirectory())
+            }
+        } else if (volume == null) {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            volume = volumesCache.find { it.isPrimary || it.isEmulated }
+                ?: throw IllegalStateException("Internal storage appears to be unavailable at this moment")
+        }
         var (fileRelative, mimeTypeReal) = computeFileAndMime(fileIn, mimeType)
         val folderName = fileRelative.path.split('/', limit = 2)[0]
         @SuppressLint("NewApi") // folders array is fine to use in this isolated case

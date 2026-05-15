@@ -31,8 +31,7 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         var token = MediaStoreCompat.needRequestCreate(
             context,
-            getSdCard(),
-            "Music/test.mp3", "audio/mpeg",
+            "Music/test.mp3", getSdCard(), "audio/mpeg",
             false
         )
         assertThat(token).isNotNull()
@@ -41,8 +40,8 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         // first, assert that our early check catches this issue
         assertThat(assertThrows(SecurityException::class.java) {
             MediaStoreCompat.create(
-                context, getSdCard(),
-                "Music/test.mp3", "audio/mpeg",
+                context,
+                "Music/test.mp3", getSdCard(), "audio/mpeg",
             )
         }).hasMessageThat().isEqualTo(
             "WRITE_EXTERNAL_STORAGE has to be granted for " +
@@ -53,8 +52,8 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         assertThat(assertThrows(SecurityException::class.java) {
             MediaStoreCompat.mediaProviderSdCachedValue = true // avoid poisoning cache due to spy
             MediaStoreCompat.create(
-                spy, getSdCard(),
-                "Music/test.mp3", "audio/mpeg",
+                spy,
+                "Music/test.mp3", getSdCard(), "audio/mpeg",
             )
         }).hasMessageThat().also {
             it.endsWith(
@@ -70,8 +69,7 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         grantStoragePermission()
         token = MediaStoreCompat.needRequestCreate(
             context,
-            getSdCard(),
-            "Music/test.mp3", "audio/mpeg",
+            "Music/test.mp3", getSdCard(), "audio/mpeg",
             false
         )
         assertThat(token).isNotNull()
@@ -80,8 +78,8 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         // ensure that granting storage permission didn't fix it
         assertThat(assertThrows(SecurityException::class.java) {
             MediaStoreCompat.create(
-                context, getSdCard(),
-                "Music/test.mp3", "audio/mpeg",
+                context,
+                "Music/test.mp3", getSdCard(), "audio/mpeg",
             )
         }).hasMessageThat().isEqualTo(
             "no permission to create " +
@@ -90,11 +88,10 @@ class CreateSdCardTest : SecondaryStoragePreparer(true) {
         gainAccessToTokenHappyPath(context, listOf(token))
         // now that we finally have permission it really should work
         token = MediaStoreCompat.needRequestCreate(context,
-            getSdCard(),
-            "Music")
+            "Music", getSdCard())
         assertThat(token).isNull()
         val uri = MediaStoreCompat.create(
-            context, getSdCard(), "Music/folder123/test.mp3",
+            context, "Music/folder123/test.mp3", getSdCard(),
             "audio/mpeg"
         )
         assertThat(uri).isNotNull()
