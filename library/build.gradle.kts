@@ -72,7 +72,7 @@ mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
 
-    coordinates("io.github.nift4.mediastorecompat", "minsdk21", "1.0.0-alpha02")
+    coordinates("io.github.nift4.mediastorecompat", "minsdk21", "1.0.0-alpha03")
 
     pom {
         name.set("MediaStoreCompat")

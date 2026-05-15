@@ -2011,8 +2011,8 @@ object MediaStoreCompat {
         if (mediaType == null && needsType || mediaFile == null && needsFile
             || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && ((needsOwner &&
                     ownerPackageName == null) || (needsIsDownload && isDownload == null)))) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && mediaUri.pathSegments[1] ==
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI.pathSegments[1] && (mediaType == null
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && (mediaUri.pathSegments[1] ==
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI.pathSegments[1] && mediaType == null
                 && needsType || isDownload == null && needsIsDownload)
             ) {
                 // we have to query the files table to find out the media type
@@ -2092,7 +2092,8 @@ object MediaStoreCompat {
                                 )
                             )!!
                         )
-                        isDownload = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) it.getInt(
+                        isDownload = isDownload ?:
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) it.getInt(
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.IS_DOWNLOAD
                             )
@@ -3289,11 +3290,12 @@ object MediaStoreCompat {
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q ||
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && (isManager ?:
             hasWriteExternalStorage(context)) && canMediaProviderAccessSd(context, volume)) {
-            val cursor = context.contentResolver.query(uri, null,
-                null, null, null)
-            if (cursor == null || !cursor.moveToFirst())
-                throw IllegalArgumentException("can't query $uri")
-            val valuesBackup = cursor.rowToContentValues()
+            val valuesBackup = context.contentResolver.query(uri, null,
+                null, null, null).use { cursor ->
+                if (cursor == null || !cursor.moveToFirst())
+                    throw IllegalArgumentException("can't query $uri")
+                cursor.rowToContentValues()
+            }
             var ok = true
             val exists = mediaFile.exists()
             if (exists && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
