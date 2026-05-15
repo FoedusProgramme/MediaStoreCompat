@@ -348,10 +348,15 @@ object MediaStoreCompat {
     internal fun supportsWriteRequestForSidecar() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             || SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 2
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun isAffectedByMoveGenericVolumeBug() =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA &&
                 (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                         SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) < 22)
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun isAffectedByPlaylistMimeReset() =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     /**
      * Get a media [Uri] for a file, scanning the file if none is found. This can fail for the
@@ -1223,7 +1228,11 @@ object MediaStoreCompat {
                 .contains(folderName) && folders[MEDIA_TYPE_AUDIO]!!.contains(folderName)) {
             mimeTypeReal = "audio/3gpp"
         }
-        val mediaType = getMediaTypeForMime(mimeTypeReal)
+        val mediaType = if (mimeType != DocumentsContract.Document.MIME_TYPE_DIR)
+            getMediaTypeForMime(mimeTypeReal)
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            folders.entries.find { it.value.contains(folderName) }?.key ?: MEDIA_TYPE_NONE
+        else MEDIA_TYPE_NONE
         var wrongMediaTypeException: Exception? = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             mimeType?.equals(mimeTypeReal, ignoreCase = true) == false) {
@@ -1262,7 +1271,7 @@ object MediaStoreCompat {
                         throw wrongMediaTypeException
                     throw IllegalArgumentException(
                         "folder $folderName not allowed, allowed folders " +
-                                "are ${folders[mediaType]!!} (can't request MANAGE_EXTERNAL_STORAGE)"
+                                "are $okFolders (can't request MANAGE_EXTERNAL_STORAGE)"
                     )
                 }
                 if (isManager ?: Environment.isExternalStorageManager())
@@ -1275,9 +1284,9 @@ object MediaStoreCompat {
             return null
         }
         // We can use MediaStore to insert media files into primary or secondary storage in Q if the
-        // file follows the legacy folder rules.
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-            folders[mediaType]?.contains(folderName) == true) {
+        // file follows the legacy folder rules. (Except playlists which are affected by two bugs)
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && mediaType != MEDIA_TYPE_PLAYLIST &&
+            getOkFolders(mediaType).contains(folderName)) {
             return null
         }
         // because we only use SAF if canMediaProviderAccessSd() unexpectedly returns false, always
@@ -1287,7 +1296,7 @@ object MediaStoreCompat {
             if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q)
                 throw IllegalArgumentException("WRITE_EXTERNAL_STORAGE has to be declared in " +
                         "manifest for Android 10 when not following Q's restricted folder rules: " +
-                        "folder $folderName not allowed, allowed folders are ${folders[mediaType]}")
+                        "folder $folderName not allowed, allowed folders are ${getOkFolders(mediaType)}")
                     .apply { if (wrongMediaTypeException != null)
                         addSuppressed(wrongMediaTypeException) }
             else
@@ -2013,7 +2022,10 @@ object MediaStoreCompat {
                     ownerPackageName == null) || (needsIsDownload && isDownload == null)))) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && (mediaUri.pathSegments[1] ==
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI.pathSegments[1] && mediaType == null
-                && needsType || isDownload == null && needsIsDownload)
+                && needsType || mediaUri.pathSegments[1] == @Suppress("deprecation")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI.pathSegments[1] && needsOwner
+                        && Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
+                        ownerPackageName == null || isDownload == null && needsIsDownload)
             ) {
                 // we have to query the files table to find out the media type
                 try {
@@ -2077,10 +2089,10 @@ object MediaStoreCompat {
                                 MediaStore.MediaColumns.IS_DOWNLOAD,
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        else arrayOf(
+                        else if (guessMediaTypeFromUri(mediaUri) != MEDIA_TYPE_PLAYLIST) arrayOf(
                             MediaStore.MediaColumns.DATA,
                             MediaStore.MediaColumns.OWNER_PACKAGE_NAME
-                        ), null,
+                        ) else arrayOf(MediaStore.MediaColumns.DATA), null,
                         null, null
                     ).use {
                         if (it == null || !it.moveToFirst())
@@ -2098,11 +2110,12 @@ object MediaStoreCompat {
                                 MediaStore.MediaColumns.IS_DOWNLOAD
                             )
                         ) == 1 else false // Due to lack of permissions we have to assume the worst
-                        ownerPackageName = it.getString(
+                        ownerPackageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                            || guessMediaTypeFromUri(mediaUri) != MEDIA_TYPE_PLAYLIST) it.getString(
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        )
+                        ) else ownerPackageName
                         // Due to lack of permissions we have to assume the worst
                         /* if (needsType) */ mediaType = mediaType ?: MEDIA_TYPE_NONE
                     }
@@ -2161,7 +2174,8 @@ object MediaStoreCompat {
                             MediaStore.MediaColumns.IS_DOWNLOAD,
                             MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                         )
-                    else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        guessMediaTypeFromUri(mediaUri) != MEDIA_TYPE_PLAYLIST)
                         arrayOf(
                             MediaStore.MediaColumns.DATA,
                             MediaStore.MediaColumns.OWNER_PACKAGE_NAME
@@ -2189,7 +2203,8 @@ object MediaStoreCompat {
                     } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                         isDownload = false
                     }
-                    ownerPackageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ownerPackageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        && guessMediaTypeFromUri(mediaUri) != MEDIA_TYPE_PLAYLIST) {
                         it.getString(
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
@@ -2648,7 +2663,7 @@ object MediaStoreCompat {
             delete(context, uri, ownerPackageName, mediaType, isDownload, mediaFile, isManager,
                 volumesCache, persistedUriPermissionsCache)
             step = 4
-            finishCreate(context, uri, mediaFile)
+            finishCreate(context, uri, mediaFile, volumesCache)
             return newUri
         } finally {
             if (step in 1..3) {
@@ -2744,7 +2759,7 @@ object MediaStoreCompat {
         var volume: StorageVolumeCompat? = null
         if (newPathAndNameFile.isAbsolute) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-            volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            volume = StorageManagerCompat.getVolumeForPath(volumesCache, newPathAndNameFile)
             newRelativePath = newPathAndNameFile
                 .toRelativeString(volume.requireCanonicalDirectory())
         } else {
@@ -2799,8 +2814,10 @@ object MediaStoreCompat {
                     // usual :)" but honestly it's really not simple anymore. FUSE would be easier, but it
                     // has no way to surface error messages.
                     var uri = uri
-                    val msv = if (isAffectedByMoveGenericVolumeBug()) {
+                    val msv = if (isAffectedByMoveGenericVolumeBug() &&
+                        MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
                         // https://issuetracker.google.com/issues/350540990
+                        // TODO: isn't this incompatible with WR...?
                         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                         val volume =
                             StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
@@ -2824,10 +2841,28 @@ object MediaStoreCompat {
                         ),
                         ContentUris.parseId(uri)
                     )
+                    var mimeType: String? = null
+                    if (isAffectedByPlaylistMimeReset() &&
+                        guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+                        mimeType = context.contentResolver.query(
+                            uri, arrayOf(MediaStore.MediaColumns.MIME_TYPE),
+                            null, null).use { cursor ->
+                            if (cursor == null || !cursor.moveToFirst())
+                                throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                            cursor.getString(
+                                cursor.getColumnIndexOrThrow(
+                                    MediaStore.MediaColumns.MIME_TYPE
+                                )
+                            )
+                        }
+                    }
                     // also works for folders if you know their IDs
                     if (context.contentResolver.update(uri, ContentValues().apply {
                             put(MediaStore.MediaColumns.RELATIVE_PATH, newPath.parent ?: "")
                             put(MediaStore.MediaColumns.DISPLAY_NAME, newPath.name)
+                            if (mimeType != null) {
+                                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                            }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
                     return
@@ -2850,7 +2885,8 @@ object MediaStoreCompat {
         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         if (!mediaFile.exists()) {
-            if (mediaType == MEDIA_TYPE_PLAYLIST) { // Abstract playlists _can_ move
+            if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                // Abstract playlists _can_ move
                 context.checkGrantSelfUriPermission(@Suppress("deprecation")
                 MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -3129,7 +3165,7 @@ object MediaStoreCompat {
         var volume: StorageVolumeCompat? = null
         if (newPathWithoutNameFile.isAbsolute) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-            volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            volume = StorageManagerCompat.getVolumeForPath(volumesCache, newPathWithoutNameFile)
             newParent = newPathWithoutNameFile.toRelativeString(
                 volume.requireCanonicalDirectory())
         } else {
@@ -3154,7 +3190,7 @@ object MediaStoreCompat {
             throw IllegalArgumentException("$newPathWithoutName is not inside current $volume ($mediaFile)")
         }
         val invalidPath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                !folders[mediaType]!!.contains(rootFolder) && !forceMove
+                !getOkFolders(mediaType!!).contains(rootFolder) && !forceMove
         if (forceMove || invalidPath) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
@@ -3174,14 +3210,14 @@ object MediaStoreCompat {
                 mediaFile.parentFile && !isAndroidMediaFolder(context, newParent)) {
                 if (!canBecomeManager(context))
                     throw IllegalArgumentException("folder $rootFolder not allowed, allowed folders " +
-                            "are ${folders[mediaType]!!} (can't request MANAGE_EXTERNAL_STORAGE)")
+                            "are ${getOkFolders(mediaType)} (can't request MANAGE_EXTERNAL_STORAGE)")
                 if (isManager ?: Environment.isExternalStorageManager())
                     return null
                 return RequestToken.Manager
             }
         }
         val needBackportRules = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-                folders[mediaType]?.contains(rootFolder) != true
+                !getOkFolders(mediaType!!).contains(rootFolder)
         val mask = if (needBackportRules)
             PERMISSION_EFFICIENT_MOVE else PERMISSION_EFFICIENT_MOVE_Q_RULES
         return getWritePermissionInternal(context, uri,
@@ -3530,11 +3566,15 @@ object MediaStoreCompat {
                 .contains(folderName) && folders[MEDIA_TYPE_AUDIO]!!.contains(folderName)) {
             mimeTypeReal = "audio/3gpp"
         }
-        val mediaType = getMediaTypeForMime(mimeTypeReal)
+        val mediaType = if (mimeType != DocumentsContract.Document.MIME_TYPE_DIR)
+            getMediaTypeForMime(mimeTypeReal)
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            folders.entries.find { it.value.contains(folderName) }?.key ?: MEDIA_TYPE_NONE
+        else MEDIA_TYPE_NONE
         var wrongMediaTypeException: Exception? = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             mimeType?.equals(mimeTypeReal, ignoreCase = true) == false) {
-            if (getMediaTypeForMime(mimeTypeReal) != mediaType) {
+            if (getMediaTypeForMime(mimeType) != mediaType) {
                 wrongMediaTypeException = IllegalArgumentException(
                     "Sorry, the file ${fileRelative.name} can't be created with the MIME type" +
                             " $mimeType because Android doesn't recognize this MIME type," +
@@ -3687,6 +3727,13 @@ object MediaStoreCompat {
                             put(MediaStore.MediaColumns.RELATIVE_PATH, pathFile.parent)
                             put(MediaStore.MediaColumns.DISPLAY_NAME, pathFile.name)
                             put(MediaStore.MediaColumns.IS_PENDING, 1)
+                            if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                                if (!hasWriteExternalStorage(context))
+                                    throw SecurityException("Sorry, creating a playlist needs " +
+                                            "storage permission due to multiple bugs in Android 10")
+                                put(MediaStore.MediaColumns.DATA, volume.requireCanonicalDirectory()
+                                    .resolve(pathFile).path)
+                            }
                         })
                     if (uri != null)
                         context.contentResolver.delete(uri, null, null)
@@ -3712,13 +3759,19 @@ object MediaStoreCompat {
                         if (outMediaType != mediaType && mediaType != MEDIA_TYPE_SUBTITLE)
                             put(MediaStore.Files.FileColumns.MEDIA_TYPE, mediaType)
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                            if (!hasWriteExternalStorage(context))
+                                throw SecurityException("Sorry, creating a playlist needs " +
+                                        "storage permission due to multiple bugs in Android 10")
+                            put(MediaStore.MediaColumns.DATA, path.path)
+                        }
                     })
             }
             if (!(isManager ?: hasWriteExternalStorage(context)))
                 throw SecurityException(
                     "WRITE_EXTERNAL_STORAGE has to be granted for Android 10 when not " +
                             "following Q's restricted folder rules: folder $folderName not " +
-                            "allowed, allowed folders are " + folders[mediaType])
+                            "allowed, allowed folders are " + okFolders)
             ok = folder.exists()
             // this code would also work on primary, but why bother if we have storage permission,
             // and it's external (as opposed to secondary) storage? we can just use File.mkdirs() :)
@@ -3746,6 +3799,14 @@ object MediaStoreCompat {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, ".temp_deleteMePlease_" +
                                     System.currentTimeMillis())
                             put(MediaStore.MediaColumns.IS_PENDING, 1)
+                            if (resolvedMediaType == MEDIA_TYPE_PLAYLIST) {
+                                if (!hasWriteExternalStorage(context))
+                                    throw SecurityException("Sorry, creating a playlist needs " +
+                                            "storage permission due to multiple bugs in Android 10")
+                                put(MediaStore.MediaColumns.DATA, volume.requireCanonicalDirectory()
+                                    .resolve(fileRelative).resolveSibling(getAsString(
+                                    MediaStore.MediaColumns.DISPLAY_NAME)).path)
+                            }
                         })
                     if (tempUri != null) {
                         ok = context.contentResolver.delete(tempUri, null,
@@ -4124,13 +4185,44 @@ object MediaStoreCompat {
      */
     @JvmStatic
     @JvmOverloads
-    fun finishCreate(context: Context, uri: Uri, mediaFile: File? = null) {
+    fun finishCreate(context: Context, uri: Uri, mediaFile: File? = null,
+                     volumesCache: List<StorageVolumeCompat>? = null) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (uri.authority?.equals(MediaStore.AUTHORITY) == false)
                 throw IllegalArgumentException("Expected a MediaStore uri: $uri")
+            var mimeType: String? = null
+            if (isAffectedByPlaylistMimeReset() &&
+                guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+                mimeType = context.contentResolver.query(uri,
+                    arrayOf(MediaStore.MediaColumns.MIME_TYPE), null,
+                    null).use { cursor ->
+                    if (cursor == null || !cursor.moveToFirst())
+                        throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                    cursor.getString(cursor.getColumnIndexOrThrow(
+                        MediaStore.MediaColumns.MIME_TYPE))
+                }
+            }
+            val uri = if (isAffectedByMoveGenericVolumeBug() &&
+                MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
+                // https://issuetracker.google.com/issues/350540990
+                val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                val volume =
+                    StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+                (MediaStore.AUTHORITY_URI.buildUpon()
+                    .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
+                    .toString().substring(MediaStore.AUTHORITY_URI.buildUpon()
+                        .appendPath(MediaStore.getVolumeName(uri)).build().toString()
+                        .length)).toUri()
+            } else uri
             if (context.contentResolver.update(uri, ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
-            }, null, null) != 1)
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    if (mimeType != null) {
+                        // Playlists being moved will reset their MIME type to M3U, so you have to
+                        // specify correct MIME type every time to avoid getting .m3u suffix added.
+                        // TODO: report AOSP bug for this nonsense
+                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    }
+                }, null, null) != 1)
                 throw IllegalStateException("update() failed")
             return
         }
@@ -4250,15 +4342,16 @@ object MediaStoreCompat {
                                          isManager: Boolean? = null,
                                          volumesCache: List<StorageVolumeCompat>? = null,
                                          persistedUriPermissionsCache: List<UriPermission>? = null): T? {
+        var mediaUri = mediaUri
+        var mediaType = mediaType
+        var mediaFile = mediaFile
+        var ownerPackageName = ownerPackageName
         if (mediaUri.authority?.equals(MediaStore.AUTHORITY) == false)
             throw IllegalArgumentException("Expected a MediaStore uri: $mediaUri")
-        if (mode == "r")
-            return callback(mediaUri) // read always works like this
+        if (mode == "r" && Build.VERSION.SDK_INT != Build.VERSION_CODES.Q)
+            return callback(mediaUri) // read always works like this except for Q playlists
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!supportsWriteRequestForSidecar() && !(isManager ?: isManager(context))) {
-                var mediaType = mediaType
-                var mediaFile = mediaFile
-                var ownerPackageName = ownerPackageName
                 queryMissing(context, mediaUri, ownerPackageName, mediaType, null,
                     mediaFile, needsOwner = true, needsFile = true, needsType = true,
                     needsIsDownload = false) {
@@ -4279,19 +4372,6 @@ object MediaStoreCompat {
             }
             return callback(mediaUri)
         }
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            // On Q, writing through MediaStore Uri ensures it will stay up to date as it will
-            // trigger an automatic rescan. To ensure we can write if possible, try to get a grant.
-            if (context.checkGrantSelfUriPermission(ContentUris.removeId(mediaUri),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION))
-                return callback(mediaUri)
-        }
-        var mediaType = mediaType
-        var mediaFile = mediaFile
-        var ownerPackageName = ownerPackageName
         queryMissing(context, mediaUri, ownerPackageName, mediaType, null, mediaFile,
             needsOwner = true, needsFile = true,
             needsType = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q, needsIsDownload = false) {
@@ -4300,11 +4380,24 @@ object MediaStoreCompat {
             mediaFile = mediaFileH
             ownerPackageName = ownerPackageNameH
         }
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-            (ownerPackageName == context.packageName || context.checkSelfUriPermission(
-                mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)))
-            return callback(mediaUri)
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+            if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                // Work around "IllegalArgumentException: Invalid column owner_package_name"
+                mediaUri = ContentUris.withAppendedId(FILES_EXTERNAL_CONTENT_URI,
+                    ContentUris.parseId(mediaUri))
+            }
+            // On Q, writing through MediaStore Uri ensures it will stay up to date as it will
+            // trigger an automatic rescan. To ensure we can write if possible, try to get a grant.
+            if (context.checkGrantSelfUriPermission(ContentUris.removeId(mediaUri),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                || ownerPackageName == context.packageName || context.checkSelfUriPermission(
+                    mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+                return callback(mediaUri)
+        }
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         if (volume.isPrimary) {
@@ -4636,14 +4729,15 @@ object MediaStoreCompat {
                             isManager: Boolean? = null,
                             volumesCache: List<StorageVolumeCompat>? = null,
                             persistedUriPermissionsCache: List<UriPermission>? = null) {
+        var ownerPackageName = ownerPackageName
+        var mediaType = mediaType
+        var mediaFile = mediaFile
+        var isDownload = isDownload
+        var volumesCache = volumesCache
         if (!supportsWriteRequestForSidecar() && ownerPackageName != context.packageName &&
             (mediaType == MEDIA_TYPE_PLAYLIST || mediaType == MEDIA_TYPE_SUBTITLE ||
                     mediaType == null) && !(canBecomeManager(context) &&
                     (isManager ?: Environment.isExternalStorageManager()))) {
-            var ownerPackageName = ownerPackageName
-            var mediaType = mediaType
-            var mediaFile = mediaFile
-            var isDownload = isDownload
             queryMissing(
                 context, uri, ownerPackageName, mediaType, isDownload,
                 null, needsOwner = true, needsType = true, needsIsDownload = false,
@@ -4668,6 +4762,37 @@ object MediaStoreCompat {
             }
         }
         val values = ContentValues()
+        val uri = if (isAffectedByMoveGenericVolumeBug() &&
+            MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
+            // https://issuetracker.google.com/issues/350540990
+            // TODO: isn't this incompatible with WR...?
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            val volume =
+                StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            (MediaStore.AUTHORITY_URI.buildUpon()
+                .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
+                    .toString().substring(MediaStore.AUTHORITY_URI.buildUpon()
+                        .appendPath(MediaStore.getVolumeName(uri)).build().toString()
+                        .length)).toUri()
+        } else uri
+        if (isAffectedByPlaylistMimeReset()) {
+            if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+                val mimeType = context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.MediaColumns.MIME_TYPE), null,
+                    null
+                ).use { cursor ->
+                    if (cursor == null || !cursor.moveToFirst())
+                        throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                    cursor.getString(
+                        cursor.getColumnIndexOrThrow(
+                            MediaStore.MediaColumns.MIME_TYPE
+                        )
+                    )
+                }
+                values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            }
+        }
         values.put(MediaStore.MediaColumns.IS_TRASHED, if (isTrashed) 1 else 0)
         if (context.contentResolver.update(uri, values, null, null) != 1) {
             throw IllegalStateException("failed to mark $uri as trashed: update() returned 0")

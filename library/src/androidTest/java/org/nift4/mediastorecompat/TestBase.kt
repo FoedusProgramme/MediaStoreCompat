@@ -400,6 +400,10 @@ abstract class TestBase {
         return getSdCard().requireCanonicalDirectory().absolutePath
     }
 
+    protected fun getInternalPath(): String {
+        return getInternalStorage().requireCanonicalDirectory().absolutePath
+    }
+
     protected fun getDevice(): UiDevice {
         return UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
     }
