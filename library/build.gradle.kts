@@ -5,6 +5,7 @@ import kotlin.math.max
 
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.publish)
 }
 
 android {
@@ -61,6 +62,40 @@ android {
             }
         }
     }
+}
+
+mavenPublishing {
+    publishToMavenCentral()
+    signAllPublications()
+
+    coordinates("io.github.nift4.mediastorecompat", "minsdk21", "1.0.0-alpha01")
+
+    pom {
+        name.set("MediaStoreCompat")
+        description.set("Effortlessly access media files on Android 5 or later, on internal storage and on SD cards")
+        inceptionYear.set("2026")
+        url.set("https://github.com/FoedusProgramme/MediaStoreCompat")
+        licenses {
+            license {
+                name.set("The Apache License, Version 2.0")
+                url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
+            }
+        }
+        developers {
+            developer {
+                id.set("nift4")
+                name.set("Nick")
+                url.set("https://github.com/nift4/")
+            }
+        }
+        scm {
+            url.set("https://github.com/FoedusProgramme/MediaStoreCompat")
+            connection.set("scm:git:git://github.com/FoedusProgramme/MediaStoreCompat.git")
+            developerConnection.set("scm:git:ssh://git@github.com/FoedusProgramme/MediaStoreCompat.git")
+        }
+    }
+
 }
 
 dependencies {
