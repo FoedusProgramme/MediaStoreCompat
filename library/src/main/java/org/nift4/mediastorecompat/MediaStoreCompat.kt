@@ -3311,6 +3311,12 @@ object MediaStoreCompat {
             ownerPackageName = ownerPackageNameH
             isDownload = isDownloadH
         }
+        if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+            && !mediaFile!!.exists()) { // abstract playlists are special
+            return getWritePermissionInternal(context, uri, true, isManager,
+                PERMISSION_UPDATE_SQL, ownerPackageName, mediaType, isDownload,
+                mediaFile, volumesCache, null)
+        }
         if (volume != null && mediaFile!!.toRelativeString(volume
                 .requireCanonicalDirectory()).startsWith("../")) {
             throw IllegalArgumentException("$newPathWithoutName is not inside current $volume ($mediaFile)")
