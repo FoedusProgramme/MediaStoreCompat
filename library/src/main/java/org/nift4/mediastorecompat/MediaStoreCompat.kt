@@ -1529,7 +1529,7 @@ object MediaStoreCompat {
         return
     }
 
-    private fun scanFileOrThrow(context: Context, file: String): Uri? {
+    internal fun scanFileOrThrow(context: Context, file: String): Uri? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             return scanFileInternal(context, file)
         }
@@ -2257,7 +2257,8 @@ object MediaStoreCompat {
                     } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                         isDownload = false
                     }
-                    ownerPackageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ownerPackageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                        || Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
                         && guessMediaTypeFromUri(mediaUri) != MEDIA_TYPE_PLAYLIST) {
                         it.getString(
                             it.getColumnIndexOrThrow(
@@ -3907,11 +3908,9 @@ object MediaStoreCompat {
             if (safUri is Uri) {
                 mkdirsSaf(
                     context.contentResolver, safUri,
-                    File(
-                        StorageManagerCompat.getExternalStoragePath(
-                            DocumentsContract.getDocumentId(safUri)
-                        )
-                    ).parent ?: ""
+                StorageManagerCompat.getExternalStoragePath(
+                        DocumentsContract.getDocumentId(safUri)
+                    )
                 )
             } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
                 canMediaProviderAccessSd(context, volume)) {
@@ -4155,7 +4154,7 @@ object MediaStoreCompat {
             treeId).let { if (it.startsWith("./")) it.substring(2)
         else if (it == ".") "" else it })
         var first = File(folderPathFromVolume).relativeTo(treePath)
-        while (true) {
+        root@while (true) {
             // We can check existence of two folders at once with one Binder call :)
             if (first.path.isEmpty()) {
                 // ... except if we can't because there is only one folder left to check
@@ -4192,28 +4191,38 @@ object MediaStoreCompat {
             val parentUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri,
                 StorageManagerCompat.buildExternalStorageDocumentId(
                     treeVolume, parent.path))
+            val targetId = StorageManagerCompat.buildExternalStorageDocumentId(
+                treeVolume, treePath.resolve(first).path)
             try {
+                // Note: FileSystemProvider doesn't support selections, we have to do it on our side
                 content.query(parentUri,
-                    arrayOf(DocumentsContract.Document.COLUMN_MIME_TYPE),
-                    "${DocumentsContract.Document.COLUMN_DOCUMENT_ID} = ?",
-                    arrayOf(StorageManagerCompat.buildExternalStorageDocumentId(
-                        treeVolume, treePath.resolve(first).path)),
-                    null
+                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE),
+                    null, null, null
                 ).use {
                     if (it != null && it.moveToFirst()) {
-                        val mime = it.getString(
-                            it.getColumnIndexOrThrow(
-                                DocumentsContract.Document.COLUMN_MIME_TYPE))
-                        if (mime != DocumentsContract.Document.MIME_TYPE_DIR) {
-                            // This is important if this is the topmost folder we are asked to
-                            // create, as then the caller may believe it actually exists after we
-                            // return. We instead throw. Also do this throw instead of relying on
-                            // createDocument() to throw simply because we already have this info
-                            // and there's no point in not throwing.
-                            throw IllegalArgumentException(
-                                "Not a directory, instead $mime: $parentUri child ${first.name}")
-                        }
-                        break
+                        val documentIdColumn = it.getColumnIndexOrThrow(
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                        do {
+                            if (it.getString(documentIdColumn) != targetId)
+                                continue
+                            val mime = it.getString(
+                                it.getColumnIndexOrThrow(
+                                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                                )
+                            )
+                            if (mime != DocumentsContract.Document.MIME_TYPE_DIR) {
+                                // This is important if this is the topmost folder we are asked to
+                                // create, as then the caller may believe it actually exists after we
+                                // return. We instead throw. Also do this throw instead of relying on
+                                // createDocument() to throw simply because we already have this info
+                                // and there's no point in not throwing.
+                                throw IllegalArgumentException(
+                                    "Not a directory, instead $mime: $parentUri child ${first.name}"
+                                )
+                            }
+                            break@root
+                        } while (it.moveToNext())
                     }
                 }
                 first = first.parentFile ?: File("")

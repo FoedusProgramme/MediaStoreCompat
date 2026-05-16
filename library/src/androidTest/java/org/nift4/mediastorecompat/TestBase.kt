@@ -134,57 +134,12 @@ abstract class TestBase {
         return mockContext
     }
 
-    private fun scanFileInternal(context: Context, file: String): Uri? {
-        val result = AtomicReference<Uri>(null)
-        val latch = CountDownLatch(1)
-        MediaScannerConnection.scanFile(
-            context, arrayOf(file),
-            null
-        ) { _, mediaUri -> result.set(mediaUri); latch.countDown() }
-        assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue()
-        return result.get()
-    }
-
+    @SuppressLint("SdCardPath")
     protected fun scanFile(context: Context, file: String): Uri? {
-        val ext = File(file).extension
-        val isPlaylist = ext == "m3u" || ext == "pls" || ext == "wpl"
-        if (!isPlaylist || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return scanFileInternal(context, file)
-        }
-        scanFileInternal(context, file)?.let {
-            return it // if it works, it sure was worth the try, but usually it fails
-        }
-        val latch = CountDownLatch(1)
-        val finishReceiver = object : BroadcastReceiver() {
-            override fun onReceive(p0: Context?, p1: Intent?) {
-                latch.countDown()
-            }
-        }
-        ContextCompat.registerReceiver(context, finishReceiver, IntentFilter(
-            Intent.ACTION_MEDIA_SCANNER_FINISHED).apply {
-            addDataScheme("file")
-        }, ContextCompat.RECEIVER_EXPORTED)
-        // Playlist files have a bug where they only get updated on volume scan
-        context.startService(Intent("android.media.IMediaScannerService")
-            .setClassName("com.android.providers.media",
-            "com.android.providers.media.MediaScannerService")
-            .putExtra("volume", "external"))
-        assertThat(latch.await(30, TimeUnit.SECONDS)).isTrue()
-        context.unregisterReceiver(finishReceiver)
-        return context.contentResolver.query(MediaStoreCompat.FILES_EXTERNAL_CONTENT_URI,
-            arrayOf(MediaStore.Files.FileColumns._ID,
-                MediaStore.Files.FileColumns.MEDIA_TYPE),
-            "${MediaStore.Files.FileColumns.DATA} = ?",
-            arrayOf(file),
-            null).use {
-            if (it != null && it.moveToFirst())
-                ContentUris.withAppendedId(
-                    MediaStoreCompat.getBaseUriForMediaType(
-                        MediaStoreCompat.VOLUME_EXTERNAL,
-                        it.getInt(1)
-                    ), it.getLong(0))
-            else null
-        }
+        val file = if (file.startsWith("/sdcard")) file.replaceFirst("/sdcard",
+            StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
+                    || it.isEmulated }.requireCanonicalDirectory().path) else file
+        return MediaStoreCompat.scanFileOrThrow(context, file)
     }
 
     protected fun answerManagerRequest(allow: Boolean) {

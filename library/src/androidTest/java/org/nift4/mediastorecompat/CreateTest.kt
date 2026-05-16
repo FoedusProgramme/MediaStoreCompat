@@ -32,20 +32,28 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(TestParameterInjector::class)
-class CreateInternalTest : TestBase() {
-    @TestParameter(/*"docx", "mp3", "mp4", "txt",*/ "pls", "m3u", "jpg", "wpl", "xspf")
+class CreateTest(
+    @param:TestParameter
+    private val isSd: Boolean
+) : SecondaryStoragePreparer(isSd) {
+    @TestParameter("docx", "mp3", "mp4", "txt", "pls", "m3u", "jpg", "wpl", "xspf", "abcd")
     private var ext: String = "null"
 
     @TestParameter("Music", "DCIM", "Pictures", "Playlists", "Download", "Documents",
         "Movies", "Podcasts", "Customfolder123")
     private var folder: String = "null"
 
-    @TestParameter("true", "false")
+    @TestParameter
     private var withPermission = false
+
+    // TODO: add subfolders
+    
+    private fun getPath() = if (isSd) getSdPath() else getInternalPath()
+    private fun getVolume() = if (isSd) getSdCard() else getInternalStorage()
 
     private fun isValid(withPermission: Boolean): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q)
-            return true
+            return withPermission
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && withPermission)
             return true
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
@@ -69,6 +77,7 @@ class CreateInternalTest : TestBase() {
         if (ext == "wpl" && folder == "Music") return true
         if (ext == "m3u" && folder == "Music") return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (ext == "mp4" && folder == "Pictures") return true
             if (ext == "xspf" && folder == "Music") return true
             if (ext == "xspf" && folder == "Movies") return true
             if (ext == "pls" && folder == "Movies") return true
@@ -81,58 +90,120 @@ class CreateInternalTest : TestBase() {
     @Test
     fun createFile() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        scanFile(context, getInternalStorage().requireCanonicalDirectory()
-            .resolve("$folder/test.$ext").absolutePath)
-        scanFile(context, getInternalStorage().requireCanonicalDirectory()
-            .resolve(folder).absolutePath)
+        try {
+            scanFile(
+                context, getVolume().requireCanonicalDirectory()
+                    .resolve("$folder/test.$ext").absolutePath
+            )
+            scanFile(
+                context, getVolume().requireCanonicalDirectory()
+                    .resolve(folder).absolutePath
+            )
+        } catch (_: Exception) {}
         if (withPermission) {
             assume().that(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M).isTrue()
-            assertThat(
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                assertThat(
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_MEDIA_IMAGES
+                    )
+                ).isEqualTo(
+                    PackageManager.PERMISSION_DENIED
                 )
-            ).isEqualTo(
-                PackageManager.PERMISSION_DENIED
-            )
+                assertThat(
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_MEDIA_VIDEO
+                    )
+                ).isEqualTo(
+                    PackageManager.PERMISSION_DENIED
+                )
+                assertThat(
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_MEDIA_AUDIO
+                    )
+                ).isEqualTo(
+                    PackageManager.PERMISSION_DENIED
+                )
+            } else {
+                assertThat(
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                ).isEqualTo(
+                    PackageManager.PERMISSION_DENIED
+                )
+            }
             if (!isValid(false)) {
                 assertThrows(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                     IllegalArgumentException::class.java else SecurityException::class.java) {
                     MediaStoreCompat.create(
-                        context, "$folder/test.$ext", getInternalStorage()
+                        context, "$folder/test.$ext", getVolume()
                     )
                 }
                 val token = MediaStoreCompat.needRequestCreate(
                     context,
-                    "$folder/test.$ext", getInternalStorage()
+                    "$folder/test.$ext", getVolume()
                 )
                 assertThat(token).isNotNull()
                 assertThat(token!!.requestManager).isTrue()
-                assertThat(token.uri).isNull()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || !isSd) {
+                    assertThat(token.uri).isNull()
+                } else {
+                    assertThat(token.uri).isEqualTo(getSafIdOnSd(folder))
+                }
                 assertThrows(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                     IllegalArgumentException::class.java else SecurityException::class.java) {
                     MediaStoreCompat.create(
-                        context, "$folder/test.$ext", getInternalStorage()
+                        context, "$folder/test.$ext", getVolume()
                     )
                 }
             }
-            grantStoragePermission()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                grantPermission(Manifest.permission.READ_MEDIA_IMAGES)
+                grantPermission(Manifest.permission.READ_MEDIA_VIDEO)
+                grantPermission(Manifest.permission.READ_MEDIA_AUDIO)
+            } else {
+                grantStoragePermission()
+            }
         }
-        if (!isValid(withPermission)) {
+        if (!isValid(withPermission)) { // implies withPermission=false until incl P
             val token = MediaStoreCompat.needRequestCreate(
                 context,
-                "$folder/test.$ext", getInternalStorage()
+                "$folder/test.$ext", getVolume()
             )
             assertThat(token).isNotNull()
             assertThat(token!!.requestManager).isTrue()
-            assertThat(token.uri).isNull()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || !isSd) {
+                assertThat(token.uri).isNull()
+            } else {
+                assertThat(token.uri).isEqualTo(getSafIdOnSd(folder))
+            }
             assertThrows(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                 IllegalArgumentException::class.java else SecurityException::class.java) {
                 MediaStoreCompat.create(
-                    context, "$folder/test.$ext", getInternalStorage()
+                    context, "$folder/test.$ext", getVolume()
                 )
             }
             return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && isSd) {
+            val token = MediaStoreCompat.needRequestCreate(
+                context,
+                "$folder/test.$ext", getVolume()
+            )
+            assertThat(token).isNotNull()
+            assertThat(token!!.requestManager).isFalse()
+            assertThat(token.uri).isEqualTo(getSafIdOnSd(folder))
+            assertThrows(SecurityException::class.java) {
+                MediaStoreCompat.create(
+                    context, "$folder/test.$ext", getVolume()
+                )
+            }
+            gainAccessToTokenHappyPath(context, token)
         }
         assertThat(
             MediaStoreCompat.needRequestCreate(
@@ -141,7 +212,7 @@ class CreateInternalTest : TestBase() {
             )
         ).isNull()
         val uri = MediaStoreCompat.create(
-            context, "$folder/test.$ext", getInternalStorage()
+            context, "$folder/test.$ext", getVolume()
         )
         assertThat(uri).isNotNull()
         MediaStoreCompat.openOutputStream(context, uri!!).use {
@@ -151,20 +222,25 @@ class CreateInternalTest : TestBase() {
         }
         MediaStoreCompat.finishCreate(context, uri)
         assertThat(
-            executeShellCommand("cat ${getInternalPath()}/$folder/test.$ext")
+            executeShellCommand("cat ${getPath()}/$folder/test.$ext")
         ).isEqualTo("hello world")
     }
 
     @After
     fun cleanUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val uri = MediaStoreCompat.scanFile(context, "${getInternalPath()}/$folder/test.$ext")
-        executeShellCommand("rm ${getInternalPath()}/$folder/test.$ext")
+        val uri = MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test.$ext")
+        executeShellCommand("rm ${getPath()}/$folder/test.$ext")
         if (uri != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.R)
-            MediaStoreCompat.delete(context, uri)
+            try {
+                MediaStoreCompat.delete(context, uri)
+            } catch (e: Exception) {
+                if (e.message?.contains("Missing file for") != true)
+                    throw e
+            }
         if (folder == "Customfolder123")
-            executeShellCommand("rmdir ${getInternalPath()}/$folder")
-        MediaStoreCompat.scanFile(context, "${getInternalPath()}/$folder/test.$ext")
-        MediaStoreCompat.scanFile(context, "${getInternalPath()}/$folder")
+            executeShellCommand("rmdir ${getPath()}/$folder")
+        MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test.$ext")
+        MediaStoreCompat.scanFile(context, "${getPath()}/$folder")
     }
 }
