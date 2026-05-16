@@ -362,7 +362,11 @@ object MediaStoreCompat {
      * Get a media [Uri] for a file, scanning the file if none is found. This can fail for the
      * reasons described in [scanFile].
      */
+    @SuppressLint("SdCardPath")
     fun getMediaUriForFile(context: Context, file: String): Uri {
+        val file = if (file.startsWith("/sdcard")) file.replaceFirst("/sdcard",
+            StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
+                    || it.isEmulated }.requireCanonicalDirectory().path) else file
         val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             context.contentResolver.query(
                 FILES_EXTERNAL_CONTENT_URI,
@@ -436,6 +440,42 @@ object MediaStoreCompat {
     }
 
     /**
+     * Returns the media [Uri] with the volume resolved to the proper value.
+     *
+     * This is required to work around a bug in Android 10-15 regarding trashing and moving files.
+     *
+     * In case of any issues, the error is logged and the original [Uri] is returned unmodified.
+     */
+    @JvmStatic
+    fun resolveMediaUriVolume(context: Context, uri: Uri): Uri {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            MediaStore.getVolumeName(uri) == VOLUME_EXTERNAL) {
+            try {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.MediaColumns.VOLUME_NAME), null,
+                    null, null
+                ).use { cursor ->
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val volumeName = cursor.getString(cursor.getColumnIndexOrThrow(
+                            MediaStore.MediaColumns.VOLUME_NAME))
+                        (MediaStore.AUTHORITY_URI.buildUpon()
+                            .appendPath(volumeName).build().toString() + uri
+                            .toString().substring(
+                                MediaStore.AUTHORITY_URI.buildUpon()
+                                    .appendPath(MediaStore.getVolumeName(uri))
+                                    .build().toString().length
+                            )).toUri()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to resolve volume", e)
+            }
+        }
+        return uri
+    }
+
+    /**
      * Similar to the original method, this backport performs a permission check to ensure the
      * returned Uri is accessible using a persisted grant. If this is not relevant, consider using
      * [getDocumentUriEx] instead and set the resolvePermissions mode to [ResolvePermissions.Never].
@@ -478,6 +518,7 @@ object MediaStoreCompat {
      *   are insufficient permissions, instead of throwing [SecurityException], the return value
      *   will be a [String], which is the document ID of the relevant media [Uri].
      */
+    @SuppressLint("SdCardPath")
     @JvmStatic
     @JvmOverloads
     fun getDocumentUriEx(context: Context, mediaUri: Uri?, mediaFile: File?,
@@ -545,6 +586,11 @@ object MediaStoreCompat {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && forWrite == null &&
             resolvePermissions == ResolvePermissions.OnlyPersisted) {
             if (mediaUri == null) {
+                val file = if (mediaFile!!.absolutePath.startsWith("/sdcard"))
+                    mediaFile.absolutePath.replaceFirst("/sdcard",
+                    StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
+                            || it.isEmulated }.requireCanonicalDirectory().path) else
+                                mediaFile.absolutePath
                 // If we have a grant for the media uri but don't usually have access to the file,
                 // this will fail. The caller has to supply the mediaUri in that case.
                 val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -558,7 +604,7 @@ object MediaStoreCompat {
                             putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
                                 "${MediaStore.Files.FileColumns.DATA} = ?")
                             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
-                                arrayOf(mediaFile!!.canonicalPath))
+                                arrayOf(file))
                             putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
                             putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
                         },
@@ -579,7 +625,7 @@ object MediaStoreCompat {
                             MediaStore.MediaColumns._ID
                         ),
                         "${MediaStore.Files.FileColumns.DATA} = ?",
-                        arrayOf(mediaFile!!.canonicalPath),
+                        arrayOf(file),
                         null
                     )
                 }
@@ -806,6 +852,10 @@ object MediaStoreCompat {
      * correct base URI for use with [ContentUris.withAppendedId] that will allow maximum possible
      * access on all API levels. That is, for [MEDIA_TYPE_AUDIO] it would return a [Uri] from
      * [MediaStore.Audio.Media.getContentUri].
+     *
+     * Also, for Android 10-15, it's required to specify the correct volume in the Uri to be allowed
+     * to move and trash files due to a bug that didn't resolve [MediaStore.VOLUME_EXTERNAL] to the
+     * correct volume.
      */
     @JvmStatic
     fun getBaseUriForMediaType(volume: String?, mediaType: Int): Uri {
@@ -1436,8 +1486,12 @@ object MediaStoreCompat {
      *
      * @see MediaScannerConnection.scanFile
      */
+    @SuppressLint("SdCardPath")
     @JvmStatic
     fun scanFile(context: Context, file: String): Uri? {
+        val file = if (file.startsWith("/sdcard")) file.replaceFirst("/sdcard",
+            StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
+                    || it.isEmulated }.requireCanonicalDirectory().path) else file
         return try {
             scanFileOrThrow(context, file)
         } catch (e: Exception) {
@@ -2817,11 +2871,12 @@ object MediaStoreCompat {
                     val msv = if (isAffectedByMoveGenericVolumeBug() &&
                         MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
                         // https://issuetracker.google.com/issues/350540990
-                        // TODO: isn't this incompatible with WR...?
                         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                         val volume =
                             StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-                        volume.mediaStoreVolumeName
+                        if (volume.mediaStoreVolumeName != MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                            volume.mediaStoreVolumeName
+                        else MediaStore.VOLUME_EXTERNAL
                     } else MediaStore.getVolumeName(uri)
                     val newPath = File(newRelativePath)
                     var outMediaType = mediaType!!
@@ -3220,6 +3275,19 @@ object MediaStoreCompat {
                 !getOkFolders(mediaType!!).contains(rootFolder)
         val mask = if (needBackportRules)
             PERMISSION_EFFICIENT_MOVE else PERMISSION_EFFICIENT_MOVE_Q_RULES
+        val uri = if (isAffectedByMoveGenericVolumeBug()) {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+            if (volume.mediaStoreVolumeName == MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                uri
+            else (MediaStore.AUTHORITY_URI.buildUpon()
+                .appendPath(volume.mediaStoreVolumeName).build().toString() +
+                    uri.toString().substring(
+                        MediaStore.AUTHORITY_URI.buildUpon()
+                            .appendPath(MediaStore.getVolumeName(uri))
+                            .build().toString().length
+                    )).toUri()
+        } else uri
         return getWritePermissionInternal(context, uri,
             true, isManager, mask, ownerPackageName, mediaType,
             isDownload, mediaFile, volumesCache, persistedUriPermissionsCache)
@@ -4208,11 +4276,15 @@ object MediaStoreCompat {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 val volume =
                     StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-                (MediaStore.AUTHORITY_URI.buildUpon()
-                    .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
-                    .toString().substring(MediaStore.AUTHORITY_URI.buildUpon()
-                        .appendPath(MediaStore.getVolumeName(uri)).build().toString()
-                        .length)).toUri()
+                if (volume.mediaStoreVolumeName != MediaStore.VOLUME_EXTERNAL_PRIMARY) {
+                    (MediaStore.AUTHORITY_URI.buildUpon()
+                        .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
+                        .toString().substring(
+                            MediaStore.AUTHORITY_URI.buildUpon()
+                                .appendPath(MediaStore.getVolumeName(uri)).build().toString()
+                                .length
+                        )).toUri()
+                } else uri
             } else uri
             if (context.contentResolver.update(uri, ContentValues().apply {
                     put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -4586,12 +4658,13 @@ object MediaStoreCompat {
                          mediaType: Int? = null, mediaFile: File? = null, isManager: Boolean? = null,
                          volumesCache: List<StorageVolumeCompat>? = null,
                          persistedUriPermissionsCache: List<UriPermission>? = null): RequestToken? {
+        var mediaFile = mediaFile
+        var mediaType = mediaType
+        var ownerPackageName = ownerPackageName
+        var volumesCache = volumesCache
         if (!supportsWriteRequestForSidecar() && !(isManager ?: isManager(context))
             && context.packageName != ownerPackageName && (mediaType == MEDIA_TYPE_SUBTITLE
                     || mediaType == MEDIA_TYPE_PLAYLIST || mediaType == null)) {
-            var mediaType = mediaType
-            var mediaFile = mediaFile
-            var ownerPackageName = ownerPackageName
             queryMissing(context, mediaUri, ownerPackageName, mediaType, null,
                 mediaFile, needsOwner = true, needsFile = true, needsType = true,
                 needsIsDownload = false) {
@@ -4609,6 +4682,25 @@ object MediaStoreCompat {
                     persistedUriPermissionsCache)
             }
         }
+        val mediaUri = if (isAffectedByMoveGenericVolumeBug()) {
+            if (mediaFile != null) {
+                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile)
+                if (volume.mediaStoreVolumeName == MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    mediaUri
+                else (MediaStore.AUTHORITY_URI.buildUpon()
+                    .appendPath(volume.mediaStoreVolumeName).build().toString() +
+                        mediaUri.toString().substring(
+                        MediaStore.AUTHORITY_URI.buildUpon()
+                            .appendPath(MediaStore.getVolumeName(mediaUri))
+                            .build().toString().length
+                    )).toUri()
+            } else {
+                val resolvedUri = resolveMediaUriVolume(context, mediaUri)
+                if (MediaStore.getVolumeName(resolvedUri) != MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    resolvedUri else mediaUri
+            }
+        } else mediaUri
         // because SDK >=R, all other optional parameters are never used, thus don't add them here
         return getWritePermissionInternal(context, mediaUri, true,
             isManager, PERMISSION_UPDATE_SQL, ownerPackageName, mediaType,
@@ -4765,15 +4857,18 @@ object MediaStoreCompat {
         val uri = if (isAffectedByMoveGenericVolumeBug() &&
             MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
             // https://issuetracker.google.com/issues/350540990
-            // TODO: isn't this incompatible with WR...?
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             val volume =
                 StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-            (MediaStore.AUTHORITY_URI.buildUpon()
-                .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
-                    .toString().substring(MediaStore.AUTHORITY_URI.buildUpon()
-                        .appendPath(MediaStore.getVolumeName(uri)).build().toString()
-                        .length)).toUri()
+            if (volume.mediaStoreVolumeName != MediaStore.VOLUME_EXTERNAL_PRIMARY) {
+                (MediaStore.AUTHORITY_URI.buildUpon()
+                    .appendPath(volume.mediaStoreVolumeName).build().toString() + uri
+                    .toString().substring(
+                        MediaStore.AUTHORITY_URI.buildUpon()
+                            .appendPath(MediaStore.getVolumeName(uri)).build().toString()
+                            .length
+                    )).toUri()
+            } else uri
         } else uri
         if (isAffectedByPlaylistMimeReset()) {
             if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
