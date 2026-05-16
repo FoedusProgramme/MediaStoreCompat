@@ -176,4 +176,6 @@ class ModernMiscTest : TestBase() {
         assertThat(recordings.isDirectory).isFalse()
         assertThat(androidRecordings.delete()).isTrue()
     }
+
+    // TODO: test delete request allow & deny cases
 }

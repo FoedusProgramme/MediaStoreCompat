@@ -4748,7 +4748,7 @@ object MediaStoreCompat {
         var volumesCache: List<StorageVolumeCompat>? = null
         var hasSdCard: Boolean? = null
         var isManager: Boolean? = null
-        var urisForSaf: MutableSet<String>? = null
+        var urisForSaf: MutableSet<Uri>? = null
         if (!supportsWriteRequestForSidecar()) {
             isManager = isManager(context)
             urisForSaf = mutableSetOf()
@@ -4777,7 +4777,7 @@ object MediaStoreCompat {
             if (!supportsWriteRequestForSidecar() && !isManager!! && ownerPackageName !=
                 context.packageName && (mediaType == MEDIA_TYPE_SUBTITLE ||
                         mediaType == MEDIA_TYPE_PLAYLIST)) {
-                urisForSaf!! += it.toString()
+                urisForSaf!! += it
                 return@mapNotNull null
             }
             if (vn == VOLUME_EXTERNAL && isAffectedByMoveGenericVolumeBug() &&
@@ -5580,7 +5580,7 @@ object MediaStoreCompat {
             throw IllegalArgumentException("Too many URIs: ${uris.size} > 2000")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             var isManager: Boolean? = null
-            var urisForSaf: MutableSet<String>? = null
+            var urisForSaf: MutableSet<Uri>? = null
             if (!supportsWriteRequestForSidecar()) {
                 isManager = isManager(context)
                 urisForSaf = mutableSetOf()
@@ -5600,7 +5600,7 @@ object MediaStoreCompat {
                 if (!supportsWriteRequestForSidecar() && !isManager!! && ownerPackageName !=
                     context.packageName && (mediaType == MEDIA_TYPE_SUBTITLE ||
                             mediaType == MEDIA_TYPE_PLAYLIST)) {
-                    urisForSaf!! += it.toString()
+                    urisForSaf!! += it
                     return@mapNotNull null
                 }
                 val vn = MediaStore.getVolumeName(it)
