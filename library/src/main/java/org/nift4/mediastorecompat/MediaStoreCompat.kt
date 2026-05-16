@@ -3087,9 +3087,9 @@ object MediaStoreCompat {
                         if (fakeMediaType != null && mediaType != fakeMediaType) {
                             // We had changed the media type to be able to move this, so we'll have
                             // to undo that now.
-                            context.contentResolver.update(fileUri!!,
+                            if (context.contentResolver.update(fileUri!!,
                                 ContentValues().apply {
-                                    put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+                                    put(MediaStore.Files.FileColumns.IS_PENDING, 1)
                                     put(MediaStore.Files.FileColumns.MEDIA_TYPE, mediaType)
                                     put("format", when (mediaType) {
                                         else if isDirAndFakeMedia -> 0x3001
@@ -3097,8 +3097,34 @@ object MediaStoreCompat {
                                         MEDIA_TYPE_IMAGE -> 0x3800
                                         MEDIA_TYPE_VIDEO -> 0xB980
                                         else -> 0x3000
-                                    }) // TODO: doesn't this need to happen in two steps?
-                                }, null, null)
+                                    })
+                                }, null, null) != 1)
+                                Log.e(TAG, "Failed to update file in MediaStore (1)")
+                        }
+                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                            context.checkGrantSelfUriPermission(@Suppress("deprecation")
+                            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                            if (context.contentResolver.update(ContentUris.withAppendedId(
+                                    @Suppress("deprecation")
+                                    MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, id),
+                                    ContentValues().apply {
+                                        put(@Suppress("deprecation")
+                                        MediaStore.Audio.Playlists.IS_PENDING, 0)
+                                        put(@Suppress("deprecation")
+                                        MediaStore.Audio.Playlists.NAME,
+                                            newPath.nameWithoutExtension)
+                                    }, null, null) != 1)
+                                throw IllegalStateException("Failed to update playlist in MediaStore")
+                        } else {
+                            if (context.contentResolver.update(fileUri!!,
+                                ContentValues().apply {
+                                    put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+                                }, null, null) != 1)
+                                throw IllegalStateException("Failed to update file in MediaStore")
                         }
                         return
                     } else if (rows == 0 && fakeIsDownload && ((mediaFileUsedToExist &&
@@ -3108,6 +3134,7 @@ object MediaStoreCompat {
                 }
             }
         }
+        val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
         // canWrite: https://github.com/d4rken-org/sdmaid/issues/312#issuecomment-191460988
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (volume.isPrimary || mediaFile.canWrite())) {
@@ -3115,12 +3142,33 @@ object MediaStoreCompat {
                 throw SecurityException("WRITE_EXTERNAL_STORAGE is required for moving files " +
                         "before Android Q")
             }
-            val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
             if (!newFile.parentFile!!.exists() && !newFile.parentFile!!.mkdirs()) {
                 throw IllegalStateException("Failed to mkdirs() folders")
             }
             if (!mediaFile.renameTo(newFile))
                 throw IllegalStateException("Failed to renameTo($newFile) file")
+            if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                context.checkGrantSelfUriPermission(@Suppress("deprecation")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                if (context.contentResolver.update(ContentUris.withAppendedId(
+                        @Suppress("deprecation") MediaStore.Audio.Playlists
+                            .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
+                        ContentValues().apply {
+                            put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
+                                newFile.nameWithoutExtension)
+                            put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
+                                newFile.absolutePath)
+                        }, null, null) != 1)
+                    throw IllegalStateException("Failed to update playlist in MediaStore")
+            } else if (context.contentResolver.update(uri, ContentValues().apply {
+                        put(MediaStore.MediaColumns.DATA, newFile.absolutePath)
+                    }, null, null) != 1) {
+                Log.e(TAG, "Failed to update file in MediaStore")
+            }
             return
         }
         var safUri: Any? = null
@@ -3166,6 +3214,28 @@ object MediaStoreCompat {
                             moveResult, newPath.name)
                     } else moveResult
                     if (renameResult != null) {
+                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                            context.checkGrantSelfUriPermission(@Suppress("deprecation")
+                            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                                        or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                            if (context.contentResolver.update(ContentUris.withAppendedId(
+                                    @Suppress("deprecation") MediaStore.Audio.Playlists
+                                        .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
+                                    ContentValues().apply {
+                                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
+                                            newFile.nameWithoutExtension)
+                                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
+                                            newFile.absolutePath)
+                                    }, null, null) != 1)
+                                throw IllegalStateException("Failed to update playlist in MediaStore")
+                        } else if (context.contentResolver.update(uri, ContentValues().apply {
+                                put(MediaStore.MediaColumns.DATA, newFile.absolutePath)
+                            }, null, null) != 1) {
+                            Log.e(TAG, "Failed to update file in MediaStore")
+                        }
                         return
                     } else {
                         throw IllegalStateException("rename $safUri to ${newPath.name} failed")
