@@ -17,9 +17,11 @@
 package org.nift4.mediastorecompat
 
 import android.Manifest
+import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ext.SdkExtensions
+import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
@@ -224,6 +226,19 @@ class CreateTest(
         assertThat(
             executeShellCommand("cat ${getPath()}/$folder/test.$ext")
         ).isEqualTo("hello world")
+        context.contentResolver.query(ContentUris.withAppendedId(
+            MediaStoreCompat.FILES_EXTERNAL_CONTENT_URI,
+            ContentUris.parseId(uri)),
+            arrayOf(MediaStore.Files.FileColumns.MEDIA_TYPE), null,
+            null, null).use { cursor ->
+            if (cursor == null || !cursor.moveToFirst())
+                throw IllegalArgumentException("Failed to query $uri")
+            val mediaType = cursor.getInt(cursor.getColumnIndexOrThrow(
+                MediaStore.Files.FileColumns.MEDIA_TYPE))
+            assertThat(mediaType).isEqualTo(MediaStoreCompat.getMediaTypeForMime(
+                MediaStoreCompat.guessMimeTypeFromFileName(
+                    "${getPath()}/$folder/test.$ext")))
+        }
     }
 
     @After

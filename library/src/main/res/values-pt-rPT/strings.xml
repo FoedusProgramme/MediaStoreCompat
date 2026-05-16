@@ -14,8 +14,7 @@
      limitations under the License.
  -->
 
-<resources xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+<resources xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <plurals name="permission_more_thumb" formatted="false" msgid="4392079224649478923">
       <item quantity="one">+<xliff:g id="COUNT_0">^1</xliff:g></item>
       <item quantity="other">+<xliff:g id="COUNT_1">^1</xliff:g></item>
@@ -31,7 +30,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> mova <xliff:g id="COUNT">^2</xliff:g> ficheiros de áudio para o lixo?</item>
     </plurals>
     <plurals name="permission_progress_trash_audio" formatted="false" msgid="8142631134676951388">
-      <item quantity="one">A mover o ficheiro de áudio para o lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A mover o ficheiro de áudio para o lixo…</item>
       <item quantity="other">A mover <xliff:g id="COUNT">^1</xliff:g> ficheiros de áudio para o lixo…</item>
     </plurals>
     <plurals name="permission_trash_video" formatted="false" msgid="4672871911555787438">
@@ -39,7 +38,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> mova <xliff:g id="COUNT">^2</xliff:g> vídeos para o lixo?</item>
     </plurals>
     <plurals name="permission_progress_trash_video" formatted="false" msgid="2566683722600149120">
-      <item quantity="one">A mover o vídeo para o lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A mover o vídeo para o lixo…</item>
       <item quantity="other">A mover <xliff:g id="COUNT">^1</xliff:g> vídeos para o lixo…</item>
     </plurals>
     <plurals name="permission_trash_image" formatted="false" msgid="6400475304599873227">
@@ -47,7 +46,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> mova <xliff:g id="COUNT">^2</xliff:g> fotos para o lixo?</item>
     </plurals>
     <plurals name="permission_progress_trash_image" formatted="false" msgid="4529586663770971476">
-      <item quantity="one">A mover a foto para o lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A mover a foto para o lixo…</item>
       <item quantity="other">A mover <xliff:g id="COUNT">^1</xliff:g> fotos para o lixo…</item>
     </plurals>
     <plurals name="permission_trash_generic" formatted="false" msgid="3814167365075039711">
@@ -55,7 +54,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> mova <xliff:g id="COUNT">^2</xliff:g> itens para o lixo?</item>
     </plurals>
     <plurals name="permission_progress_trash_generic" formatted="false" msgid="6995141190896908381">
-      <item quantity="one">A mover o item para o lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A mover o item para o lixo…</item>
       <item quantity="other">A mover <xliff:g id="COUNT">^1</xliff:g> itens para o lixo…</item>
     </plurals>
     <plurals name="permission_untrash_audio" formatted="false" msgid="7795265980168966321">
@@ -63,7 +62,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> retire <xliff:g id="COUNT">^2</xliff:g> ficheiros de áudio do lixo?</item>
     </plurals>
     <plurals name="permission_progress_untrash_audio" formatted="false" msgid="4047200387122043006">
-      <item quantity="one">A retirar o ficheiro de áudio do lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A retirar o ficheiro de áudio do lixo…</item>
       <item quantity="other">A retirar <xliff:g id="COUNT">^1</xliff:g> ficheiros de áudio do lixo…</item>
     </plurals>
     <plurals name="permission_untrash_video" formatted="false" msgid="332894888445508879">
@@ -71,7 +70,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> retire <xliff:g id="COUNT">^2</xliff:g> vídeos do lixo?</item>
     </plurals>
     <plurals name="permission_progress_untrash_video" formatted="false" msgid="7996233128375495458">
-      <item quantity="one">A retirar o vídeo do lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A retirar o vídeo do lixo…</item>
       <item quantity="other">A retirar <xliff:g id="COUNT">^1</xliff:g> vídeos do lixo…</item>
     </plurals>
     <plurals name="permission_untrash_image" formatted="false" msgid="7024071378733595056">
@@ -79,7 +78,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> retire <xliff:g id="COUNT">^2</xliff:g> fotos do lixo?</item>
     </plurals>
     <plurals name="permission_progress_untrash_image" formatted="false" msgid="3473769131910926122">
-      <item quantity="one">A retirar a foto do lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A retirar a foto do lixo…</item>
       <item quantity="other">A retirar <xliff:g id="COUNT">^1</xliff:g> fotos do lixo…</item>
     </plurals>
     <plurals name="permission_untrash_generic" formatted="false" msgid="6872817093731198374">
@@ -87,7 +86,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> retire <xliff:g id="COUNT">^2</xliff:g> itens do lixo?</item>
     </plurals>
     <plurals name="permission_progress_untrash_generic" formatted="false" msgid="263867753672461510">
-      <item quantity="one">A retirar o item do lixo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A retirar o item do lixo…</item>
       <item quantity="other">A retirar <xliff:g id="COUNT">^1</xliff:g> itens do lixo…</item>
     </plurals>
     <plurals name="permission_delete_audio" formatted="false" msgid="6848547621165184719">
@@ -95,7 +94,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> elimine <xliff:g id="COUNT">^2</xliff:g> ficheiros de áudio?</item>
     </plurals>
     <plurals name="permission_progress_delete_audio" formatted="false" msgid="8579231060666743501">
-      <item quantity="one">A eliminar o ficheiro de áudio…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A eliminar o ficheiro de áudio…</item>
       <item quantity="other">A eliminar <xliff:g id="COUNT">^1</xliff:g> ficheiros de áudio…</item>
     </plurals>
     <plurals name="permission_delete_video" formatted="false" msgid="1251942606336748563">
@@ -103,7 +102,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> elimine <xliff:g id="COUNT">^2</xliff:g> vídeos?</item>
     </plurals>
     <plurals name="permission_progress_delete_video" formatted="false" msgid="4349991290732459111">
-      <item quantity="one">A eliminar o vídeo…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A eliminar o vídeo…</item>
       <item quantity="other">A eliminar <xliff:g id="COUNT">^1</xliff:g> vídeos…</item>
     </plurals>
     <plurals name="permission_delete_image" formatted="false" msgid="2303409455224710111">
@@ -111,7 +110,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> elimine <xliff:g id="COUNT">^2</xliff:g> fotos?</item>
     </plurals>
     <plurals name="permission_progress_delete_image" formatted="false" msgid="118648854886957046">
-      <item quantity="one">A eliminar a foto…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A eliminar a foto…</item>
       <item quantity="other">A eliminar <xliff:g id="COUNT">^1</xliff:g> fotos…</item>
     </plurals>
     <plurals name="permission_delete_generic" formatted="false" msgid="1412218850351841181">
@@ -119,7 +118,7 @@
       <item quantity="other">Permitir que a app <xliff:g id="APP_NAME_1">^1</xliff:g> elimine <xliff:g id="COUNT">^2</xliff:g> itens?</item>
     </plurals>
     <plurals name="permission_progress_delete_generic" formatted="false" msgid="1006212243422543162">
-      <item quantity="one">A eliminar o item…</item>
+      <item quantity="one" tools:ignore="ImpliedQuantity">A eliminar o item…</item>
       <item quantity="other">A eliminar <xliff:g id="COUNT">^1</xliff:g> itens…</item>
     </plurals>
 </resources>

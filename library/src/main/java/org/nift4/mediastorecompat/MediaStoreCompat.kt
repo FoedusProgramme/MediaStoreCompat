@@ -3276,7 +3276,8 @@ object MediaStoreCompat {
                 !getOkFolders(mediaType!!).contains(rootFolder)
         val mask = if (needBackportRules)
             PERMISSION_EFFICIENT_MOVE else PERMISSION_EFFICIENT_MOVE_Q_RULES
-        val uri = if (isAffectedByMoveGenericVolumeBug()) {
+        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            isAffectedByMoveGenericVolumeBug()) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
             if (volume.mediaStoreVolumeName == MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -3441,13 +3442,20 @@ object MediaStoreCompat {
                     ContentValues().apply {
                         put(MediaStore.Files.FileColumns.DATA, mediaFile.path)
                         put(MediaStore.Files.FileColumns.MEDIA_TYPE,
-                            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)
+                            MediaStore.Files.FileColumns.MEDIA_TYPE_NONE)
                     })
                 if (fileUri == null) {
                     failed = IllegalStateException("The old entry was deleted and a new one " +
                             "couldn't be added, so the file can't be deleted")
                     Log.e(TAG, "error adding file to delete", failed)
                     ok = false
+                } else {
+                    if (context.contentResolver.update(fileUri, ContentValues().apply {
+                        // Media type can only be changed by update(), not by insert()
+                        put(MediaStore.Files.FileColumns.MEDIA_TYPE,
+                            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)
+                    }, null, null) != 1)
+                        Log.e(TAG, "failed to change media type to image")
                 }
             }
             if (ok) {
@@ -3820,13 +3828,11 @@ object MediaStoreCompat {
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
                             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                return context.contentResolver.insert(
+                val uri = context.contentResolver.insert(
                     baseUri, ContentValues().apply {
                         put(MediaStore.MediaColumns.RELATIVE_PATH, fileRelative.parent)
                         put(MediaStore.MediaColumns.DISPLAY_NAME, fileRelative.name)
                         put(MediaStore.MediaColumns.MIME_TYPE, mimeTypeReal)
-                        if (outMediaType != mediaType && mediaType != MEDIA_TYPE_SUBTITLE)
-                            put(MediaStore.Files.FileColumns.MEDIA_TYPE, mediaType)
                         put(MediaStore.MediaColumns.IS_PENDING, 1)
                         if (mediaType == MEDIA_TYPE_PLAYLIST) {
                             if (!hasWriteExternalStorage(context))
@@ -3835,6 +3841,17 @@ object MediaStoreCompat {
                             put(MediaStore.MediaColumns.DATA, path.path)
                         }
                     })
+                if (uri != null && (outMediaType != mediaType ||
+                            folderName == Environment.DIRECTORY_DOWNLOADS) &&
+                    mediaType != MEDIA_TYPE_SUBTITLE) {
+                    context.contentResolver.update(ContentUris.withAppendedId(
+                        FILES_EXTERNAL_CONTENT_URI,
+                        ContentUris.parseId(uri)), ContentValues().apply {
+                        // Now this actually gets applied
+                        put(MediaStore.Files.FileColumns.MEDIA_TYPE, mediaType)
+                    }, null, null)
+                }
+                return uri
             }
             if (!(isManager ?: hasWriteExternalStorage(context)))
                 throw SecurityException(
@@ -3934,7 +3951,7 @@ object MediaStoreCompat {
         }
         val baseUri = getBaseUriForMediaType(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) volume.mediaStoreVolumeName
-            else null, MEDIA_TYPE_NONE)
+            else null, mediaType)
         context.checkGrantSelfUriPermission(baseUri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -3947,10 +3964,6 @@ object MediaStoreCompat {
                     put(MediaStore.Files.FileColumns.IS_PENDING, 1)
                 }
                 put(MediaStore.Files.FileColumns.MIME_TYPE, mimeTypeReal)
-                put(MediaStore.Files.FileColumns.MEDIA_TYPE, mediaType.let {
-                    if (it == MEDIA_TYPE_DOCUMENT || it == MEDIA_TYPE_SUBTITLE)
-                        MEDIA_TYPE_NONE else it
-                })
             })
     }
 

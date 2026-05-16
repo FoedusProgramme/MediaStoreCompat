@@ -621,11 +621,13 @@ abstract class DeleteUiActivity extends Activity {
      */
     private class DescriptionTask extends AsyncTask<List<Uri>, Void, List<Description>> {
         private final View bodyView;
+        private final Context context;
         private final Resources res;
 
         public DescriptionTask(@NonNull View bodyView) {
             this.bodyView = bodyView;
-            this.res = bodyView.getContext().getResources();
+            this.context = bodyView.getContext();
+            this.res = context.getResources();
         }
 
         @Override
@@ -669,7 +671,7 @@ abstract class DeleteUiActivity extends Activity {
 
             for (Uri uri : uris) {
                 try {
-                    final Description desc = new Description(bodyView.getContext(), uri, loadFlags);
+                    final Description desc = new Description(context, uri, loadFlags);
                     res.add(desc);
 
                     // Once we've loaded enough information to bind our UI, we
