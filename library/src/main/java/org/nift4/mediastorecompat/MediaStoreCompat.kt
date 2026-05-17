@@ -2808,7 +2808,7 @@ object MediaStoreCompat {
                       isDownload: Boolean? = null, mediaFile: File? = null,
                       isManager: Boolean? = null,
                       volumesCache: List<StorageVolumeCompat>? = null,
-                      persistedUriPermissionsCache: List<UriPermission>? = null) {
+                      persistedUriPermissionsCache: List<UriPermission>? = null): File {
         if (uri.authority?.equals(MediaStore.AUTHORITY) == false)
             throw IllegalArgumentException("Expected a MediaStore uri: $uri")
         var volumesCache = volumesCache
@@ -2869,19 +2869,19 @@ object MediaStoreCompat {
                                         "permission. The default folders are: ${folders.values.flatten()}"
                             )
                         }
-                        return
+                        return absTarget
                     }
                 } else {
                     // Creates all parent folders for us if needed. Here used to be "Nice and simple as
                     // usual :)" but honestly it's really not simple anymore. FUSE would be easier, but it
                     // has no way to surface error messages.
                     var uri = uri
+                    volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                    val volume =
+                        StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                     val msv = if (isAffectedByMoveGenericVolumeBug() &&
                         MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
                         // https://issuetracker.google.com/issues/350540990
-                        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                        val volume =
-                            StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                         if (volume.mediaStoreVolumeName != MediaStore.VOLUME_EXTERNAL_PRIMARY)
                             volume.mediaStoreVolumeName
                         else MediaStore.VOLUME_EXTERNAL
@@ -2928,7 +2928,7 @@ object MediaStoreCompat {
                             }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
-                    return
+                    return volume.requireCanonicalDirectory().resolve(newPath)
                 }
             }
         }
@@ -2947,6 +2947,7 @@ object MediaStoreCompat {
         }
         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+        val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
         if (!mediaFile.exists()) {
             if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                 // Abstract playlists _can_ move
@@ -2963,11 +2964,10 @@ object MediaStoreCompat {
                         put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
                             File(newRelativePath).nameWithoutExtension)
                         put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
-                            volume.requireCanonicalDirectory().resolve(newRelativePath)
-                                .absolutePath)
+                            newFile.absolutePath)
                     }, null, null) != 1)
                     throw IllegalStateException("Failed to rename abstract playlist")
-                return
+                return newFile
             }
             throw IllegalArgumentException("File that doesn't exist can't move: $mediaFile")
         }
@@ -3010,9 +3010,6 @@ object MediaStoreCompat {
                 var fileUri: Uri? = null
                 var mediaFileUsedToExist = false
                 var targetFileUsedToNotExist = false
-                val targetFile = StorageManagerCompat.getVolumeForPath(volumesCache,
-                    mediaFile).requireCanonicalDirectory()
-                    .resolve(newRelativePath)
                 // Increase our chances this is successful
                 if (ownerPackageName != context.packageName &&
                     !context.checkGrantSelfUriPermission(baseUri!!,
@@ -3045,7 +3042,7 @@ object MediaStoreCompat {
                         // detect the result to increase reliability and avoid being chaotic). see:
                         // https://cs.android.com/android/_/android/platform/packages/providers/MediaProvider/+/3f12cfbd7f7d76e9908ebe9285f6d0c8bc1e7775
                         mediaFileUsedToExist = mediaFile.exists()
-                        targetFileUsedToNotExist = !targetFile.exists()
+                        targetFileUsedToNotExist = !newFile.exists()
                     }
                 } else if (fakeMediaType != mediaType!!) {
                     val baseUriForFile = getBaseUriForMediaType(volume.mediaStoreVolumeName,
@@ -3133,15 +3130,14 @@ object MediaStoreCompat {
                                 }, null, null) != 1)
                                 throw IllegalStateException("Failed to update file in MediaStore")
                         }
-                        return
+                        return newFile
                     } else if (rows == 0 && fakeIsDownload && ((mediaFileUsedToExist &&
                                 !mediaFile.exists()) || (targetFileUsedToNotExist &&
-                                targetFile.exists())) // we have storage permission but weren't
-                    ) return // allowed to edit downloads table, and file was on secondary storage
+                                newFile.exists())) // we have storage permission but weren't
+                    ) return newFile // allowed to edit downloads table, and file was on SD card
                 }
             }
         }
-        val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
         // canWrite: https://github.com/d4rken-org/sdmaid/issues/312#issuecomment-191460988
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (volume.isPrimary || mediaFile.canWrite())) {
@@ -3176,7 +3172,7 @@ object MediaStoreCompat {
                     }, null, null) != 1) {
                 Log.e(TAG, "Failed to update file in MediaStore")
             }
-            return
+            return newFile
         }
         var safUri: Any? = null
         var safTargetUri: Any? = null
@@ -3189,8 +3185,7 @@ object MediaStoreCompat {
                     forWrite = true, volumesCache = volumesCache, persistedUriPermissionsCache
             )
             safTargetUri = getDocumentUriEx(
-                context, null, volume.requireCanonicalDirectory()
-                    .resolve(newPath.parent ?: ""),
+                context, null, newFile.parentFile,
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                     volume.mediaStoreVolumeName else null, ResolvePermissions.OnlyPersistedTree,
                 forWrite = true, volumesCache = volumesCache, persistedUriPermissionsCache
@@ -3243,7 +3238,7 @@ object MediaStoreCompat {
                             }, null, null) != 1) {
                             Log.e(TAG, "Failed to update file in MediaStore")
                         }
-                        return
+                        return newFile
                     } else {
                         throw IllegalStateException("rename $safUri to ${newPath.name} failed")
                     }
@@ -4948,11 +4943,9 @@ object MediaStoreCompat {
             if (ownerPackageName != context.packageName && (mediaType == MEDIA_TYPE_PLAYLIST ||
                         mediaType == MEDIA_TYPE_SUBTITLE)) {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-                val relativePath = mediaFile.resolveSibling(".trashed-${
-                    System.currentTimeMillis() / 1000L + 30 * 24 * 60 * 60}-${mediaFile.name}")
-                    .toRelativeString(volume.requireCanonicalDirectory())
-                efficientMove(context, uri, relativePath, ownerPackageName,
+                val path = mediaFile!!.resolveSibling(".trashed-${System.currentTimeMillis()
+                        / 1000L + 30 * 24 * 60 * 60}-${mediaFile.name}").absolutePath
+                efficientMove(context, uri, path, ownerPackageName,
                     mediaType, isDownload, mediaFile, false, volumesCache,
                     persistedUriPermissionsCache)
                 return
