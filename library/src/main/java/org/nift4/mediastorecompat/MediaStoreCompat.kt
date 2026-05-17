@@ -2791,6 +2791,8 @@ object MediaStoreCompat {
      *
      * Throws [SecurityException] if [needRequestEfficientMove] would return true.
      *
+     * Throws if the target file already exists. To overwrite a file, first delete and then move.
+     *
      * This method assumes that, on Android 11 or later, if file to be moved is a media file, that
      * it will be moved to an appropriate directory allowed by MediaStore on these versions.
      *
@@ -2856,11 +2858,14 @@ object MediaStoreCompat {
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_PLAYLIST
                         && mediaType != MEDIA_TYPE_SUBTITLE) || isManager!!
                 || ownerPackageName == context.packageName) {
+                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+                val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+                val absTarget = volume.requireCanonicalDirectory().resolve(newRelativePath)
+                if (absTarget.exists()) {
+                    throw IllegalArgumentException("Target file exists: $absTarget")
+                }
                 if (forceMove) {
-                    volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                    val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                     if (volume.requireCanonicalDirectory().resolve(folderName).isDirectory) {
-                        val absTarget = volume.requireCanonicalDirectory().resolve(newRelativePath)
                         absTarget.parentFile?.mkdirs()
                         if (!mediaFile.renameTo(absTarget)) {
                             throw SecurityException(
@@ -2876,9 +2881,6 @@ object MediaStoreCompat {
                     // usual :)" but honestly it's really not simple anymore. FUSE would be easier, but it
                     // has no way to surface error messages.
                     var uri = uri
-                    volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                    val volume =
-                        StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                     val msv = if (isAffectedByMoveGenericVolumeBug() &&
                         MediaStore.getVolumeName(uri) == MediaStore.VOLUME_EXTERNAL) {
                         // https://issuetracker.google.com/issues/350540990
@@ -2928,7 +2930,7 @@ object MediaStoreCompat {
                             }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
-                    return volume.requireCanonicalDirectory().resolve(newPath)
+                    return absTarget
                 }
             }
         }
@@ -2948,6 +2950,9 @@ object MediaStoreCompat {
         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
+        if (newFile.exists()) {
+            throw IllegalArgumentException("Target file exists: $newFile")
+        }
         if (!mediaFile.exists()) {
             if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                 // Abstract playlists _can_ move
