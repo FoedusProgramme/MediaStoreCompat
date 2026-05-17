@@ -1457,10 +1457,17 @@ object MediaStoreCompat {
             lastModified = it.getLongOrNull(it.getColumnIndexOrThrow(
                 MediaStore.MediaColumns.DATE_MODIFIED))
         }
-        if ((mediaFile!!.lastModified() / 1000L) > (lastModified ?: 0L)) {
+        val fileLastModified = mediaFile!!.lastModified() / 1000L
+        if (fileLastModified > (lastModified ?: 0L)) {
             // On next reboot, the abstract playlist's contents will be discarded, so it's stale.
             // It's likely the file was modified by a non-MediaStore-aware application on behalf of
             // the user, so we should read the file instead.
+            return false
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && fileLastModified > 0 &&
+            fileLastModified == lastModified) {
+            // On Android Q, equal mtime means the database representation wasn't modified at all.
+            // Previously, this sadly did not apply.
             return false
         }
         // The file could've been possibly modified using the playlist API, and hence we must use
