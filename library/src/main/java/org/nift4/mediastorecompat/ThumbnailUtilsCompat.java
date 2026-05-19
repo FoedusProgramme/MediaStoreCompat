@@ -299,10 +299,7 @@ public class ThumbnailUtilsCompat {
                         Log.w(TAG, "failed to decode bitmap", e);
                     }
                 } else {
-                    Bitmap out = decodeBitmap(raw, size, signal);
-                    if (out != null) {
-                        return out;
-                    }
+                    bitmap = decodeBitmap(raw, size, signal);
                 }
             }
         }
