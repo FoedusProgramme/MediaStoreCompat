@@ -58,6 +58,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.database.getLongOrNull
+import androidx.core.database.getStringOrNull
 import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
 import androidx.core.provider.DocumentsContractCompat
@@ -1619,19 +1620,46 @@ object MediaStoreCompat {
             // Scan pending-by-FUSE files to remove their pending flag. All other cases are handled
             // automatically by other apps or the system.
             context.contentResolver.query(FILES_EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Files.FileColumns.DATA),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                arrayOf(MediaStore.Files.FileColumns.DATA,
+                    MediaStore.Files.FileColumns.OWNER_PACKAGE_NAME)
+                else arrayOf(MediaStore.Files.FileColumns.DATA),
                 Bundle().apply {
-                    putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
-                        "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'" +
-                                " AND ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NOT ?")
-                    putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
-                        arrayOf(context.packageName))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        // Caution: on U+, a query() with OWNER_PACKAGE_NAME in selection/sort
+                        // will filter the query to only our own owned files... so do the filter
+                        // manually because in projection it's allowed (will get NULLed for
+                        // privacy if we can't see the actual owner, but it's ok, we just want
+                        // to filter out files we ourselves own).
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                            "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'")
+                    } else {
+                        putString(
+                            ContentResolver.QUERY_ARG_SQL_SELECTION,
+                            "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'" +
+                                    " AND (${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} != ?" +
+                                    " OR ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NULL)")
+                        putStringArray(
+                            ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                            arrayOf(context.packageName))
+                    }
                     putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_ONLY)
                 }, null)!!.use {
-                val dataColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                val dataColumn = it.getColumnIndexOrThrow(
+                    MediaStore.Files.FileColumns.DATA)
+                val ownerColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns
+                        .OWNER_PACKAGE_NAME) else null
+                val packageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                    context.packageName else null
                 if (it.moveToFirst()) {
                     do {
-                        scanFile(context, it.getString(dataColumn))
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            if (it.getStringOrNull(ownerColumn!!) != packageName)
+                                scanFile(context, it.getString(dataColumn))
+                        } else {
+                            scanFile(context, it.getString(dataColumn))
+                        }
                     } while (it.moveToNext())
                 }
             }
