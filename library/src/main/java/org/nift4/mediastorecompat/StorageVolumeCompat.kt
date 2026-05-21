@@ -233,6 +233,36 @@ class StorageVolumeCompat {
                 ", isEmulated=$isEmulated, descriptionLegacy=$descriptionLegacy, real=$realLegacy)"
     }
 
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as StorageVolumeCompat
+
+        if (isPrimary != other.isPrimary) return false
+        if (isEmulated != other.isEmulated) return false
+        if (uuid != other.uuid) return false
+        if (directory != other.directory) return false
+        if (canonicalDirectory != other.canonicalDirectory) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (mediaStoreVolumeName != other.mediaStoreVolumeName) return false
+        }
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = isPrimary.hashCode()
+        result = 31 * result + isEmulated.hashCode()
+        result = 31 * result + (uuid?.hashCode() ?: 0)
+        result = 31 * result + (directory?.hashCode() ?: 0)
+        result = 31 * result + (canonicalDirectory?.hashCode() ?: 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            result = 31 * result + (mediaStoreVolumeName?.hashCode() ?: 0)
+        }
+        return result
+    }
+
     companion object {
         private val getPathFile by lazy {
             @SuppressLint("NewApi")
