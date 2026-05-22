@@ -3358,11 +3358,6 @@ object MediaStoreCompat {
                             if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
                                 supportsWriteRequestForSidecar())
                                 throw IllegalStateException("Failed to update file $uri in MediaStore")
-                            Thread {
-                                // fire and forget to background thread to ignore waiting but
-                                // still log timeouts etc...
-                                scanFile(context, uri)
-                            }.start()
                             getMediaUriForFile(context, newFile.absolutePath)
                         }
                         return newFile
