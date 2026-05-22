@@ -186,6 +186,8 @@ import kotlin.text.substringAfterLast
 //  actually impossible to do?)
 // TODO: document that R+ FUSE always shows us every folder except Android/{data,media,obb} somewhere
 // TODO: report AOSP bug about being unable to move folder via FUSE even if having WR
+// TODO: the sdk-extensions assumptions might be wrong because sdk extensions were backport branches
+//  and there's no way to check as relevant branches were never released publicly
 object MediaStoreCompat {
     init {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
@@ -3683,10 +3685,16 @@ object MediaStoreCompat {
                     safUri))
                 throw IOException("failed to delete $safUri")
             try {
-                // ContentResolver.delete() is required for (abstract) playlists to delete properly
+                // ContentResolver.delete() is required for trashed files to delete properly
                 if (context.contentResolver.delete(uri, null, null) == 1)
                     return
-                throw IllegalArgumentException("nothing was deleted: $uri")
+                // It's okay if this returns == 0, this may either mean we don't have permission
+                // (which is likely why we are here in the first place) or the file is already gone.
+                // In both cases a scan will do no harm and at best will bring some benefit so do
+                // that as well.
+            } catch (_: SecurityException) {
+                // we don't have permission (which is likely why we are here in the first place).
+                // let's try using scan as that doesn't need permissions.
             } catch (e: Exception) {
                 Log.w(TAG, "failed to tell mediastore to delete file", e)
             }
