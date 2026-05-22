@@ -5009,8 +5009,12 @@ object MediaStoreCompat {
             if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_PLAYLIST ||
                         mediaType == MEDIA_TYPE_SUBTITLE)) {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                val path = mediaFile!!.resolveSibling(".trashed-${System.currentTimeMillis()
-                        / 1000L + 30 * 24 * 60 * 60}-${mediaFile.name}").absolutePath
+                if (isTrashed == mediaFile!!.name.startsWith(".trashed-"))
+                    return
+                val path = mediaFile.resolveSibling(if (isTrashed) ".trashed-" +
+                        "${System.currentTimeMillis() / 1000L + 30 * 24 * 60 * 60}-" +
+                        "${mediaFile.name}" else mediaFile.name.substring(".trashed-"
+                            .length).substringAfter('-')).absolutePath
                 efficientMove(context, uri, path, ownerPackageName,
                     mediaType, isDownload, mediaFile, false, volumesCache,
                     persistedUriPermissionsCache)
