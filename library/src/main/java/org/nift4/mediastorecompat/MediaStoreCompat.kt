@@ -1641,7 +1641,7 @@ object MediaStoreCompat {
                                     " OR ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NULL)")
                         putStringArray(
                             ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
-                            arrayOf(context.packageName))
+                            arrayOf(context.packageName)) // TODO support shared uid? or not?
                     }
                     putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_ONLY)
                 }, null)!!.use {
@@ -1650,12 +1650,11 @@ object MediaStoreCompat {
                 val ownerColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
                     it.getColumnIndexOrThrow(MediaStore.Files.FileColumns
                         .OWNER_PACKAGE_NAME) else null
-                val packageName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-                    context.packageName else null
                 if (it.moveToFirst()) {
                     do {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            if (it.getStringOrNull(ownerColumn!!) != packageName)
+                            if (!isOwned(context, it.getStringOrNull(
+                                    ownerColumn!!) ?: "null"))
                                 scanFile(context, it.getString(dataColumn))
                         } else {
                             scanFile(context, it.getString(dataColumn))
@@ -2092,6 +2091,10 @@ object MediaStoreCompat {
         }
     }
 
+    private fun isOwned(context: Context, ownerPackageName: String): Boolean {
+        return context.packageName == ownerPackageName // TODO support shared uid
+    }
+
     private inline fun queryMissing(context: Context, mediaUri: Uri, ownerPackageName: String?,
                                     mediaType: Int?, isDownload: Boolean?, mediaFile: File?,
                                     needsOwner: Boolean, needsType: Boolean,
@@ -2159,7 +2162,7 @@ object MediaStoreCompat {
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        )
+                        ) ?: "null"
                         mediaFile = File(
                             it.getString(
                                 it.getColumnIndexOrThrow(
@@ -2204,7 +2207,7 @@ object MediaStoreCompat {
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        ) else ownerPackageName
+                        ) ?: "null" else ownerPackageName
                         // Due to lack of permissions we have to assume the worst
                         /* if (needsType) */ mediaType = mediaType ?: MEDIA_TYPE_NONE
                     }
@@ -2244,7 +2247,7 @@ object MediaStoreCompat {
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        )
+                        ) ?: "null"
                     } else null
                     mediaFile = File(
                         it.getString(
@@ -2299,7 +2302,7 @@ object MediaStoreCompat {
                             it.getColumnIndexOrThrow(
                                 MediaStore.MediaColumns.OWNER_PACKAGE_NAME
                             )
-                        )
+                        ) ?: "null"
                     } else null
                 }
             }
@@ -2368,7 +2371,7 @@ object MediaStoreCompat {
                     uriIsNotWellDefined || maybePlaylistOrSubtitleOnR,
             needsIsDownload = Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q && (
                     requestedPerm == PERMISSION_EFFICIENT_MOVE_Q_RULES ||
-                    ownerPackageName != context.packageName)) {
+                            (ownerPackageName == null || !isOwned(context, ownerPackageName)))) {
             ownerPackageNameH, mediaTypeH, isDownloadH, mediaFileH ->
             ownerPackageName = ownerPackageNameH
             mediaType = mediaTypeH
@@ -2379,7 +2382,7 @@ object MediaStoreCompat {
             // Clean and simple!
             val isManager = canBecomeManager(context) &&
                     (isManager ?: Environment.isExternalStorageManager())
-            if ((isManager || ownerPackageName == context.packageName) && (requestedPerm and
+            if ((isManager || isOwned(context, ownerPackageName!!)) && (requestedPerm and
                         (PERMISSION_UPDATE_SQL_FROM_ANY_PARENT or PERMISSION_EFFICIENT_MOVE_ANY or
                                 PERMISSION_OPEN_FD_FOR_WRITE or PERMISSION_DELETE)) != 0)
                 return null
@@ -2462,7 +2465,7 @@ object MediaStoreCompat {
                     (isManager ?: hasWriteExternalStorage(context))
             val hasTablePermission by lazy {
                 if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-                    ownerPackageName == context.packageName
+                    isOwned(context, ownerPackageName!!)
                 ) true
                 // we don't need WRITE_EXTERNAL_STORAGE for Q
                 else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q || isManager) {
@@ -2674,7 +2677,7 @@ object MediaStoreCompat {
         if (!folder.startsWith("Android/media/"))
             return false
         val packageName = folder.substring("Android/media/".length).trimEnd { it == '/' }
-        if (packageName == context.packageName)
+        if (packageName == context.packageName) // TODO should this do shared uid? check system
             return true
         return context.packageManager.getPackageInfo(packageName, 0)
             .applicationInfo?.uid == Process.myUid()
@@ -2683,7 +2686,7 @@ object MediaStoreCompat {
     /**
      * Change the [MediaStore.MediaColumns.OWNER_PACKAGE_NAME] of a file to this app. This is useful
      * to be able to change this file repeatedly in the future without asking for permission over
-     * and over again.
+     * and over again. No-op if this app already owns this file.
      *
      * There's no official API to do this, so it is achieved by deleting the old file and creating
      * it again, with the same content. This is merely a convenience wrapper around other methods in
@@ -2719,6 +2722,8 @@ object MediaStoreCompat {
             isDownload = isDownloadH
             mediaFile = mediaFileH
         }
+        if (isOwned(context, ownerPackageName!!))
+            return uri // nothing to do here :)
         val persistedUriPermissionsCache = persistedUriPermissionsCache ?:
         (if (!supportsWriteRequestForSidecar() &&
             (mediaType == MEDIA_TYPE_PLAYLIST || mediaType == MEDIA_TYPE_SUBTITLE))
@@ -2727,7 +2732,6 @@ object MediaStoreCompat {
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         val isManager = isManager ?: isManager(context)
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-        val path = mediaFile.toRelativeString(volume.requireCanonicalDirectory())
         val inputStream = openInputStream(context, uri, ownerPackageName,
             mediaType, mediaFile, isManager, volumesCache, persistedUriPermissionsCache)!!
         var newUri: Uri? = null
@@ -2737,14 +2741,13 @@ object MediaStoreCompat {
                 mediaFile, isManager, volumesCache, persistedUriPermissionsCache)
             step = 1
             newUri = create(
-                context, path, volume, null, relatedUri = uri, isManager,
-                volumesCache, persistedUriPermissionsCache
+                context, mediaFile.path, volume, null, relatedUri = uri,
+                isManager, volumesCache, persistedUriPermissionsCache
             )!!
             step = 2
             openOutputStream(
-                context, newUri, "wa",
-                ownerPackageName, mediaType, mediaFile, isManager, volumesCache,
-                persistedUriPermissionsCache
+                context, newUri, "wa", context.packageName,
+                null, mediaFile, isManager, volumesCache, persistedUriPermissionsCache
             )!!.use { outputStream ->
                 inputStream.copyTo(outputStream)
             }
@@ -2753,7 +2756,7 @@ object MediaStoreCompat {
             delete(context, uri, ownerPackageName, mediaType, isDownload, mediaFile, isManager,
                 volumesCache, persistedUriPermissionsCache)
             step = 4
-            finishCreate(context, uri, mediaFile, volumesCache)
+            finishCreate(context, newUri, mediaFile, volumesCache)
             return newUri
         } finally {
             if (step in 1..3) {
@@ -2885,7 +2888,7 @@ object MediaStoreCompat {
             }
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_PLAYLIST
                         && mediaType != MEDIA_TYPE_SUBTITLE) || isManager!!
-                || ownerPackageName == context.packageName) {
+                || isOwned(context, ownerPackageName!!)) {
                 volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
                 val absTarget = volume.requireCanonicalDirectory().resolve(newRelativePath)
@@ -3044,7 +3047,7 @@ object MediaStoreCompat {
                 var mediaFileUsedToExist = false
                 var targetFileUsedToNotExist = false
                 // Increase our chances this is successful
-                if (ownerPackageName != context.packageName &&
+                if (!isOwned(context, ownerPackageName!!) &&
                     !context.checkGrantSelfUriPermission(baseUri!!,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                                 or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -3444,7 +3447,7 @@ object MediaStoreCompat {
                     mediaFile = mediaFileH
                     ownerPackageName = ownerPackageNameH
                 }
-                if (context.packageName != ownerPackageName && (mediaType == MEDIA_TYPE_SUBTITLE
+                if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE
                             || mediaType == MEDIA_TYPE_PLAYLIST)) {
                     canUseMediaStore = false
                 }
@@ -3617,7 +3620,7 @@ object MediaStoreCompat {
                             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                 )
                 val mustWork = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || granted
-                        || ownerPackageName == context.packageName || isMediaTypeForQ(mediaType!!)
+                        || isOwned(context, ownerPackageName!!) || isMediaTypeForQ(mediaType!!)
                         && (isManager ?: hasWriteExternalStorage(context))
                 try {
                     // Folders can also be deleted if we pretend they are an image.
@@ -4565,7 +4568,7 @@ object MediaStoreCompat {
                     mediaFile = mediaFileH
                     ownerPackageName = ownerPackageNameH
                 }
-                if (context.packageName != ownerPackageName && (mediaType == MEDIA_TYPE_SUBTITLE
+                if (isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE
                             || mediaType == MEDIA_TYPE_PLAYLIST)) {
                     val uri = getDocumentUriEx(context, mediaUri, mediaFile,
                         forWrite = true, volumesCache = volumesCache,
@@ -4598,7 +4601,7 @@ object MediaStoreCompat {
                             or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
                             or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                || ownerPackageName == context.packageName || context.checkSelfUriPermission(
+                || isOwned(context, ownerPackageName!!) || context.checkSelfUriPermission(
                     mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
                             or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
                 return callback(mediaUri)
@@ -4795,9 +4798,10 @@ object MediaStoreCompat {
         var mediaType = mediaType
         var ownerPackageName = ownerPackageName
         var volumesCache = volumesCache
-        if (!supportsWriteRequestForSidecar() && !(isManager ?: isManager(context))
-            && context.packageName != ownerPackageName && (mediaType == MEDIA_TYPE_SUBTITLE
-                    || mediaType == MEDIA_TYPE_PLAYLIST || mediaType == null)) {
+        if (!supportsWriteRequestForSidecar() && !(isManager ?: isManager(context)) &&
+            (ownerPackageName == null || !isOwned(context, ownerPackageName)) &&
+            (mediaType == MEDIA_TYPE_SUBTITLE || mediaType == MEDIA_TYPE_PLAYLIST
+                    || mediaType == null)) {
             queryMissing(context, mediaUri, ownerPackageName, mediaType, null,
                 mediaFile, needsOwner = true, needsFile = true, needsType = true,
                 needsIsDownload = false) {
@@ -4806,7 +4810,7 @@ object MediaStoreCompat {
                 mediaFile = mediaFileH
                 ownerPackageName = ownerPackageNameH
             }
-            if (context.packageName != ownerPackageName && (mediaType == MEDIA_TYPE_SUBTITLE
+            if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE
                         || mediaType == MEDIA_TYPE_PLAYLIST)) {
                 // we can rename files to trash them using SAF
                 return needRequestEfficientMove(context, mediaUri,
@@ -4898,8 +4902,8 @@ object MediaStoreCompat {
                 mediaType = type
                 mediaFile = file
             }
-            if (!supportsWriteRequestForSidecar() && !isManager!! && ownerPackageName !=
-                context.packageName && (mediaType == MEDIA_TYPE_SUBTITLE ||
+            if (!supportsWriteRequestForSidecar() && !isManager!! && !isOwned(context,
+                    ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE ||
                         mediaType == MEDIA_TYPE_PLAYLIST)) {
                 urisForSaf!! += it
                 return@mapNotNull null
@@ -4959,10 +4963,10 @@ object MediaStoreCompat {
         var mediaFile = mediaFile
         var isDownload = isDownload
         var volumesCache = volumesCache
-        if (!supportsWriteRequestForSidecar() && ownerPackageName != context.packageName &&
-            (mediaType == MEDIA_TYPE_PLAYLIST || mediaType == MEDIA_TYPE_SUBTITLE ||
-                    mediaType == null) && !(canBecomeManager(context) &&
-                    (isManager ?: Environment.isExternalStorageManager()))) {
+        if (!supportsWriteRequestForSidecar() && (ownerPackageName == null || !isOwned(context,
+                ownerPackageName)) && (mediaType == MEDIA_TYPE_PLAYLIST ||
+                    mediaType == MEDIA_TYPE_SUBTITLE || mediaType == null) &&
+            !(canBecomeManager(context) && (isManager ?: Environment.isExternalStorageManager()))) {
             queryMissing(
                 context, uri, ownerPackageName, mediaType, isDownload,
                 null, needsOwner = true, needsType = true, needsIsDownload = false,
@@ -4973,7 +4977,7 @@ object MediaStoreCompat {
                 isDownload = dl
                 mediaFile = file
             }
-            if (ownerPackageName != context.packageName && (mediaType == MEDIA_TYPE_PLAYLIST ||
+            if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_PLAYLIST ||
                         mediaType == MEDIA_TYPE_SUBTITLE)) {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 val path = mediaFile!!.resolveSibling(".trashed-${System.currentTimeMillis()
@@ -5045,7 +5049,8 @@ object MediaStoreCompat {
                              mediaType: Int? = null, ownerPackageName: String? = null) {
         if (SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) >= 16) {
             if (!(canBecomeManager(context) && (isManager ?:
-            Environment.isExternalStorageManager())) && ownerPackageName != context.packageName) {
+            Environment.isExternalStorageManager())) && (ownerPackageName == null ||
+                    !isOwned(context, ownerPackageName))) {
                 // if we got the owner package name and hence know it's our file, we can use that.
                 // but we don't need to query for it otherwise, the type is enough.
                 var mediaType = mediaType
@@ -5719,8 +5724,8 @@ object MediaStoreCompat {
                     ownerPackageName = owner
                     mediaType = type
                 }
-                if (!supportsWriteRequestForSidecar() && !isManager!! && ownerPackageName !=
-                    context.packageName && (mediaType == MEDIA_TYPE_SUBTITLE ||
+                if (!supportsWriteRequestForSidecar() && !isManager!! && !isOwned(context,
+                        ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE ||
                             mediaType == MEDIA_TYPE_PLAYLIST)) {
                     urisForSaf!! += it
                     return@mapNotNull null
