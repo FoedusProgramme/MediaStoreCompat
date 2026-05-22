@@ -3281,6 +3281,12 @@ object MediaStoreCompat {
                             if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
                                 supportsWriteRequestForSidecar())
                                 Log.e(TAG, "Failed to update $uri in MediaStore")
+                            scanFile(context, newFile.absolutePath)
+                            Thread {
+                                // fire and forget to background thread to ignore waiting but
+                                // still log timeouts etc...
+                                scanFile(context, uri)
+                            }.start()
                         }
                         return newFile
                     } else {
