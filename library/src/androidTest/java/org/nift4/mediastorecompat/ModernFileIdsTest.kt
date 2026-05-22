@@ -41,7 +41,7 @@ import java.io.File
 // at the moment. (We can still see them with File API). Meanwhile, Android R requires the manager
 // permission to even see them, but they _are_ in the database.
 class ModernFileIdsTest(
-    @param:TestParameter("false")
+    @param:TestParameter
     private val isSd: Boolean
 ) : SecondaryStoragePreparer(isSd) {
     private val server by lazy { ShellServer.start() }
