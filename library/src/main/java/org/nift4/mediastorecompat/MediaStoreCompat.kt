@@ -3254,7 +3254,8 @@ object MediaStoreCompat {
                             moveResult, newPath.name)
                     } else moveResult
                     if (renameResult != null) {
-                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                        if (mediaType == MEDIA_TYPE_PLAYLIST &&
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                             context.checkGrantSelfUriPermission(@Suppress("deprecation")
                             MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -3278,7 +3279,9 @@ object MediaStoreCompat {
                         } else if (context.contentResolver.update(uri, ContentValues().apply {
                                 put(MediaStore.MediaColumns.DATA, newFile.absolutePath)
                             }, null, null) != 1) {
-                            Log.e(TAG, "Failed to update file in MediaStore")
+                            if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
+                                supportsWriteRequestForSidecar())
+                                Log.e(TAG, "Failed to update $uri in MediaStore")
                         }
                         return newFile
                     } else {
