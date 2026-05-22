@@ -2749,7 +2749,8 @@ object MediaStoreCompat {
             step = 2
             openOutputStream(
                 context, newUri, "wa", context.packageName,
-                null, mediaFile, isManager, volumesCache, persistedUriPermissionsCache
+                null, null, isManager, volumesCache,
+                persistedUriPermissionsCache
             )!!.use { outputStream ->
                 inputStream.copyTo(outputStream)
             }
@@ -2761,16 +2762,24 @@ object MediaStoreCompat {
             finishCreate(context, newUri, mediaFile, volumesCache)
             return newUri
         } finally {
-            if (step in 1..3) {
-                markIsTrashedStatus(context, uri, false, ownerPackageName, mediaType,
-                    isDownload, mediaFile, isManager, volumesCache, persistedUriPermissionsCache)
-            }
-            if (step == 2) {
-                delete(context, newUri!!, isManager = isManager, volumesCache = volumesCache,
-                    persistedUriPermissionsCache = persistedUriPermissionsCache)
-            }
-            if (step < 3) {
-                inputStream.close()
+            try {
+                if (step in 1..3) {
+                    markIsTrashedStatus(
+                        context, uri, false, ownerPackageName, mediaType,
+                        isDownload, mediaFile, isManager, volumesCache, persistedUriPermissionsCache
+                    )
+                }
+                if (step == 2) {
+                    delete(
+                        context, newUri!!, isManager = isManager, volumesCache = volumesCache,
+                        persistedUriPermissionsCache = persistedUriPermissionsCache
+                    )
+                }
+                if (step < 3) {
+                    inputStream.close()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clean up after adopt failed", e)
             }
         }
     }
