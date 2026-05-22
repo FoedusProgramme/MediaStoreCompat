@@ -3288,13 +3288,13 @@ object MediaStoreCompat {
                                         put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
                                             newFile.absolutePath)
                                     }, null, null) != 1)
-                                throw IllegalStateException("Failed to update playlist in MediaStore")
+                                throw IllegalStateException("Failed to update playlist $uri in MediaStore")
                         } else if (context.contentResolver.update(uri, ContentValues().apply {
                                 put(MediaStore.MediaColumns.DATA, newFile.absolutePath)
                             }, null, null) != 1) {
                             if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
                                 supportsWriteRequestForSidecar())
-                                Log.e(TAG, "Failed to update $uri in MediaStore")
+                                throw IllegalStateException("Failed to update file $uri in MediaStore")
                             scanFile(context, newFile.absolutePath)
                             Thread {
                                 // fire and forget to background thread to ignore waiting but
