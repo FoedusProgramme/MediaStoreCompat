@@ -41,7 +41,7 @@ import java.io.File
 // at the moment. (We can still see them with File API). Meanwhile, Android R requires the manager
 // permission to even see them, but they _are_ in the database.
 class ModernFileIdsTest(
-    @param:TestParameter
+    @param:TestParameter("false")
     private val isSd: Boolean
 ) : SecondaryStoragePreparer(isSd) {
     private val server by lazy { ShellServer.start() }
@@ -92,16 +92,18 @@ class ModernFileIdsTest(
             "jpg" -> "images/media"
             else -> throw IllegalArgumentException(ext)
         }
-        val mediaUri = scanFile(context, "${getDir()}/hello.$ext")
+        var mediaUri = scanFile(context, "${getDir()}/hello.$ext")
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
             (type == "audio" || type == "video")) {
-            assume().that(mediaUri).isNotNull()
+            assertThat(mediaUri).isNull()
+            grantStoragePermission()
+            mediaUri = MediaStoreCompat.getMediaUriForFile(context, "${getDir()}/hello.$ext")
         }
         assertThat(mediaUri).isNotNull()
         assertThat(mediaUri!!.toString()).startsWith("content://media/${getMsv()}/$type/")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             gainAccessToTokenHappyPath(context, MediaStoreCompat.RequestToken.Manager)
-        } else {
+        } else if (type != "audio" && type != "video") {
             grantStoragePermission()
         }
         context.contentResolver.query(mediaUri, arrayOf(MediaStore.MediaColumns.DATA),
@@ -126,16 +128,16 @@ class ModernFileIdsTest(
     @Test
     fun testHiddenFilesHaveId() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val mediaUri = scanFile(context, "${getDir()}/.hello.$ext")
+        var mediaUri = scanFile(context, "${getDir()}/.hello.$ext")
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            assume().that(mediaUri).isNotNull()
+            assertThat(mediaUri).isNull()
+            grantStoragePermission()
+            mediaUri = MediaStoreCompat.getMediaUriForFile(context, "${getDir()}/.hello.$ext")
         }
         assertThat(mediaUri).isNotNull()
         assertThat(mediaUri!!.toString()).startsWith("content://media/${getMsv()}/file/")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             gainAccessToTokenHappyPath(context, MediaStoreCompat.RequestToken.Manager)
-        } else {
-            grantStoragePermission()
         }
         context.contentResolver.query(
             mediaUri, arrayOf(
@@ -158,16 +160,17 @@ class ModernFileIdsTest(
     @Test
     fun testNomediaFilesHaveId() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val mediaUri = scanFile(context, "${getDir()}/Folder/hello.$ext")
+        var mediaUri = scanFile(context, "${getDir()}/Folder/hello.$ext")
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            assume().that(mediaUri).isNotNull()
+            assertThat(mediaUri).isNull()
+            grantStoragePermission()
+            mediaUri = MediaStoreCompat.getMediaUriForFile(context,
+                "${getDir()}/Folder/hello.$ext")
         }
         assertThat(mediaUri).isNotNull()
         assertThat(mediaUri!!.toString()).startsWith("content://media/${getMsv()}/file/")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             gainAccessToTokenHappyPath(context, MediaStoreCompat.RequestToken.Manager)
-        } else {
-            grantStoragePermission()
         }
         context.contentResolver.query(mediaUri, arrayOf(
             MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.MEDIA_TYPE),

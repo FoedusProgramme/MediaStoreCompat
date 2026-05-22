@@ -84,7 +84,6 @@ import org.nift4.mediastorecompat.MediaStoreCompat.finishCreate
 import org.nift4.mediastorecompat.MediaStoreCompat.getBaseUriForMediaType
 import org.nift4.mediastorecompat.MediaStoreCompat.getDocumentUri
 import org.nift4.mediastorecompat.MediaStoreCompat.getDocumentUriEx
-import org.nift4.mediastorecompat.MediaStoreCompat.getSafRequestToken
 import org.nift4.mediastorecompat.MediaStoreCompat.markIsFavoriteStatus
 import org.nift4.mediastorecompat.MediaStoreCompat.markIsTrashedStatus
 import org.nift4.mediastorecompat.MediaStoreCompat.needRequestBytesWrite
@@ -162,16 +161,6 @@ import kotlin.text.substringAfterLast
  * permission request, for example on Android 10 (for non-media files on secondary storage) or
  * earlier (for secondary storage). See [needRequestCreate] and [createWriteRequest] for more
  * information.
- *
- * Android 10 doesn't scan hidden/nomedia/some invalid files and refuses to give out IDs, even
- * removing them from the db if they have an ID at the moment. But, we can still see (and write if
- * not on SD card) them with File API (or write if on SD card using SAF). Meanwhile, Android 11
- * requires the manager permission to even see hidden/nomedia files, but they _are_ in the database.
- * Under these circumstances, it's most reasonable to just outright ignore hidden/nomedia files on Q
- * similar to the system does in R and later. If access is really desired, using SAF to access them
- * is the best option. (Alternatively, an app could use File API to read and File API/SAF with
- * [getDocumentUriEx] and [getSafRequestToken] to write to these files on Android 10 only, and use
- * this class for lower versions and SAF for later ones.)
  *
  * Caution: this library will not work if [ContentResolver.takePersistableUriPermission] is called
  * on a `content://media` [Uri] that refers to a table or volume (that is, it doesn't end with an ID
@@ -363,7 +352,9 @@ object MediaStoreCompat {
 
     /**
      * Get a media [Uri] for a file, scanning the file if none is found. This can fail for the
-     * reasons described in [scanFile].
+     * reasons described in [scanFile], but it does a best-effort at working around the Android 10
+     * specific failure reasons and hence is generally expected to always succeed if storage
+     * permission is granted.
      */
     @SuppressLint("SdCardPath")
     fun getMediaUriForFile(context: Context, file: String): Uri {
@@ -412,34 +403,74 @@ object MediaStoreCompat {
         }
         cursor.use { _ ->
             // Index might be missing (Q-).
-            if (cursor == null || !cursor.moveToFirst())
-                return scanFileOrThrow(context, file)
-                    ?: throw IllegalStateException("Failed to scan this file")
-            val id = cursor.getLong(
-                cursor.getColumnIndexOrThrow(
-                    MediaStore.Files.FileColumns._ID
-                )
-            )
-            val mediaType = cursor.getInt(
-                cursor.getColumnIndexOrThrow(
-                    MediaStore.Files.FileColumns.MEDIA_TYPE
-                )
-            )
-            val isDownload = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) cursor.getInt(
-                cursor.getColumnIndexOrThrow(
-                    MediaStore.Files.FileColumns.IS_DOWNLOAD
-                )
-            ) == 1 else false
-            val volumeName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                cursor.getString(
+            if (cursor != null && cursor.moveToFirst()) {
+                val id = cursor.getLong(
                     cursor.getColumnIndexOrThrow(
-                        MediaStore.MediaColumns.VOLUME_NAME
+                        MediaStore.Files.FileColumns._ID
                     )
-                ) else null
-            return ContentUris.withAppendedId(getBaseUriForMediaType(volumeName,
-                mediaType, if (mediaType == MEDIA_TYPE_NONE ||
-                    mediaType == MEDIA_TYPE_DOCUMENT) isDownload else false), id)
+                )
+                val mediaType = cursor.getInt(
+                    cursor.getColumnIndexOrThrow(
+                        MediaStore.Files.FileColumns.MEDIA_TYPE
+                    )
+                )
+                val isDownload = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) cursor.getInt(
+                    cursor.getColumnIndexOrThrow(
+                        MediaStore.Files.FileColumns.IS_DOWNLOAD
+                    )
+                ) == 1 else false
+                val volumeName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    cursor.getString(
+                        cursor.getColumnIndexOrThrow(
+                            MediaStore.MediaColumns.VOLUME_NAME
+                        )
+                    ) else null
+                return ContentUris.withAppendedId(
+                    getBaseUriForMediaType(
+                        volumeName,
+                        mediaType, if (mediaType == MEDIA_TYPE_NONE ||
+                            mediaType == MEDIA_TYPE_DOCUMENT
+                        ) isDownload else false
+                    ), id
+                )
+            }
         }
+        scanFileOrThrow(context, file)?.let { return it }
+        if (!File(file).exists())
+            throw IllegalArgumentException("File doesn't exist: $file")
+        if (Build.VERSION.SDK_INT != Build.VERSION_CODES.Q)
+            throw IllegalStateException("Scan returned null but didn't time out and this isn't Q")
+        if (!hasWriteExternalStorage(context))
+            throw IllegalArgumentException("This file is invalid/hidden and storage permission is" +
+                    " not granted, so we can't work around this: $file")
+        val volumes = StorageManagerCompat.getStorageVolumes(context)
+        val volume = StorageManagerCompat.getVolumeForPath(volumes, File(file))
+        val isHidden = file.contains("/.") || run {
+            var current: File? = File(file).parentFile
+            while (current != null && current != volume.requireCanonicalDirectory()) {
+                if (current.resolve(".nomedia").exists())
+                    return@run true
+                current = current.parentFile
+            }
+            false
+        }
+        val fileRelativeIn = File(file).relativeTo(volume
+            .requireCanonicalDirectory())
+        val mediaType = if (!isHidden) getMediaTypeForMime(
+            guessMimeTypeFromFileName(file)) else MEDIA_TYPE_NONE
+        val (fileRelative, mimeType) = computeFileAndMime(fileRelativeIn, null)
+        val baseUri = getBaseUriForMediaType(volume.mediaStoreVolumeName, mediaType)
+        context.checkGrantSelfUriPermission(baseUri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        // This doesn't create the file yet, that is done in openFileDescriptor()
+        return context.contentResolver.insert(baseUri, ContentValues().apply {
+            put(MediaStore.Files.FileColumns.DATA, volume.requireCanonicalDirectory()
+                .resolve(fileRelative).absolutePath)
+            put(MediaStore.Files.FileColumns.MIME_TYPE, mimeType)
+        }) ?: throw IllegalStateException("insert() returned null Uri, did MediaProvider crash?")
     }
 
     /**
@@ -797,33 +828,6 @@ object MediaStoreCompat {
                 ResolvePermissions.OnlyPersistedTree, persistedUriPermissionsCache)
         }
         return ret
-    }
-
-    /**
-     * This is a helper function for getting a [RequestToken] for a SAF documentId (can be obtained
-     * from [StorageManagerCompat.buildExternalStorageDocumentId] or [getDocumentUriEx]). It is
-     * intended solely for the case where hidden/nomedia/invalid files have to be written to/deleted
-     * on Android 10, but the files are on a SD card and there's no SAF grant. In that case, this
-     * function can be used to get a [RequestToken] and then gain access with [createWriteRequest].
-     * Then, [getDocumentUriEx] with the mediaFile argument can be used to get a SAF [Uri], and the
-     * usual [DocumentsContract] and [ContentResolver] methods can be used to interact with it.
-     *
-     * This method thus allows to reuse the SAF permission request code from this library in this
-     * edge case. This library does not generally support these hidden/nomedia/invalid files on
-     * Android 10 (only) because they have no MediaStore ID on Android 10, so the interaction code
-     * itself has to be supplied by the user.
-     *
-     * Null will NOT be returned if access is already present, as this function does not verify
-     * whether access is present.
-     *
-     * This function will throw an exception on Android 11 and later.
-     */
-    @JvmStatic
-    fun getSafRequestToken(documentId: String): RequestToken {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-            throw IllegalArgumentException("getSafRequestToken is not supported by this library " +
-                    "on Android 11 and later")
-        return RequestToken.Uri(documentId, false)
     }
 
     /**
@@ -1493,6 +1497,11 @@ object MediaStoreCompat {
      * - or, on Android 10, if the file is hidden (name of it or a parent folder starts with dot)
      * - or, on Android 10, if one of the file's parents is a folder with .nomedia
      * - or, on Android 10, if the file is invalid (such as 0 bytes)
+     *
+     * If ensuring the database contains the latest scanner result is desired, this method is
+     * optimal. But if it's desired to get a media [Uri] for a file on disk (or ensure such an [Uri]
+     * at least exists in the database), prefer [getMediaUriForFile] instead because it works around
+     * most issues causing scans to fail and if it can't, it will fail with clearer error messages.
      *
      * @see MediaScannerConnection.scanFile
      */
@@ -2865,9 +2874,11 @@ object MediaStoreCompat {
         var mediaType = mediaType
         var isDownload = isDownload
         var mediaFile = mediaFile
+        var isManager = isManager
         val newPathAndNameFile = File(newPathAndName)
         val newRelativePath: String
         var volume: StorageVolumeCompat? = null
+        var forceMove = false
         if (newPathAndNameFile.isAbsolute) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             volume = StorageManagerCompat.getVolumeForPath(volumesCache, newPathAndNameFile)
@@ -2876,52 +2887,146 @@ object MediaStoreCompat {
         } else {
             newRelativePath = newPathAndName
         }
+        val folderName = newRelativePath.split('/', limit = 2)[0]
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            var isManager = isManager
             if (!supportsWriteRequestForSidecar()) {
                 isManager = isManager ?: isManager(context)
             }
-            val folderName = newRelativePath.split('/', limit = 2)[0]
             // forceMove uses a bug in FUSE implementation to move files to non-default top level
-            val forceMove = folders.values.find { it.contains(folderName) } == null &&
+            forceMove = folders.values.find { it.contains(folderName) } == null &&
                     Build.VERSION.SDK_INT == Build.VERSION_CODES.R && folderName == "Recordings" &&
                     !(isManager ?: isManager(context))
-            queryMissing(
-                context, uri, ownerPackageName, mediaType, isDownload,
-                mediaFile, needsOwner = !supportsWriteRequestForSidecar(), needsFile = forceMove ||
-                        isAffectedByMoveGenericVolumeBug() || volume != null, needsType = !forceMove
-                        || !supportsWriteRequestForSidecar(),
-                needsIsDownload = !forceMove
-            ) { ownerPackageNameH, mediaTypeH, isDownloadH, mediaFileH ->
-                ownerPackageName = ownerPackageNameH
-                mediaType = mediaTypeH
-                isDownload = isDownloadH
-                mediaFile = mediaFileH
-            }
-            if (volume != null && mediaFile!!.toRelativeString(volume
+        }
+        queryMissing(context, uri, ownerPackageName, mediaType, isDownload,
+            mediaFile, needsOwner = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
+                    || Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    !supportsWriteRequestForSidecar(),
+            needsFile = Build.VERSION.SDK_INT < Build.VERSION_CODES.R || forceMove ||
+                    isAffectedByMoveGenericVolumeBug() || volume != null, needsType =
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !forceMove
+                    || !supportsWriteRequestForSidecar(),
+            needsIsDownload = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !forceMove) {
+            ownerPackageNameH, mediaTypeH, isDownloadH, mediaFileH ->
+            ownerPackageName = ownerPackageNameH
+            mediaType = mediaTypeH
+            isDownload = isDownloadH
+            mediaFile = mediaFileH
+        }
+        if (volume != null && mediaFile!!.toRelativeString(volume
                 .requireCanonicalDirectory()).startsWith("../")) {
-                throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
+            throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
+        }
+        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+        volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
+        val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
+        if (newFile.exists()) {
+            throw IllegalArgumentException("Target file exists: $newFile")
+        }
+        if (!mediaFile.exists()) {
+            if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                // Abstract playlists _can_ move
+                context.checkGrantSelfUriPermission(@Suppress("deprecation")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                if (context.contentResolver.update(ContentUris.withAppendedId(
+                    @Suppress("deprecation") MediaStore.Audio.Playlists
+                        .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
+                    ContentValues().apply {
+                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
+                            File(newRelativePath).nameWithoutExtension)
+                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
+                            newFile.absolutePath)
+                    }, null, null) != 1)
+                    throw IllegalStateException("Failed to rename abstract playlist")
+                return newFile
             }
+            throw IllegalArgumentException("File that doesn't exist can't move: $mediaFile")
+        }
+        // If there's another dead column with this path, move will fail spectacularly
+        // So, delete it. (But only if the file doesn't exist, or we might cause data loss.)
+        // Potential data loss is also why abstract playlists are excluded on the versions where
+        // they exist.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.contentResolver.delete(FILES_EXTERNAL_CONTENT_URI, Bundle().apply {
+                    putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                        "${MediaStore.Files.FileColumns.DATA} = ?")
+                    putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(
+                        newFile.absolutePath))
+                    putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                })
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.delete(
+                    @Suppress("deprecation")
+                    MediaStore.setIncludePending(FILES_EXTERNAL_CONTENT_URI),
+                    "${MediaStore.Files.FileColumns.DATA} = ? AND" +
+                            " ${MediaStore.Files.FileColumns.MEDIA_TYPE} != $MEDIA_TYPE_PLAYLIST",
+                    arrayOf(newFile.absolutePath)
+                )
+            } else {
+                context.contentResolver.delete(
+                    FILES_EXTERNAL_CONTENT_URI,
+                    "${MediaStore.Files.FileColumns.DATA} = ? AND" +
+                            " ${MediaStore.Files.FileColumns.MEDIA_TYPE} != $MEDIA_TYPE_PLAYLIST",
+                    arrayOf(newFile.absolutePath)
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "failed to delete duplicates", t)
+        }
+        (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.contentResolver.query(
+                FILES_EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Files.FileColumns._ID),
+                Bundle().apply {
+                    putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                        "${MediaStore.Files.FileColumns.DATA} = ?")
+                    putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                        arrayOf(newFile.absolutePath))
+                    putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                },
+                null
+            )
+        } else {
+            context.contentResolver.query(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    @Suppress("deprecation")
+                    MediaStore.setIncludePending(FILES_EXTERNAL_CONTENT_URI)
+                else FILES_EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Files.FileColumns._ID),
+                "${MediaStore.Files.FileColumns.DATA} = ?",
+                arrayOf(newFile.absolutePath),
+                null
+            )
+        }).use { cursor ->
+            if (cursor != null && cursor.moveToFirst()) {
+                throw IllegalArgumentException("There is a conflicting row which could not be " +
+                        "automatically cleaned up which would cause move to fail: " +
+                        ContentUris.withAppendedId(FILES_EXTERNAL_CONTENT_URI,
+                            cursor.getLong(cursor.getColumnIndexOrThrow(
+                                MediaStore.Files.FileColumns._ID))))
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_PLAYLIST
                         && mediaType != MEDIA_TYPE_SUBTITLE) || isManager!!
                 || isOwned(context, ownerPackageName!!)) {
-                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-                val absTarget = volume.requireCanonicalDirectory().resolve(newRelativePath)
-                if (absTarget.exists()) {
-                    throw IllegalArgumentException("Target file exists: $absTarget")
-                }
                 if (forceMove) {
                     if (volume.requireCanonicalDirectory().resolve(folderName).isDirectory) {
-                        absTarget.parentFile?.mkdirs()
-                        if (!mediaFile.renameTo(absTarget)) {
+                        newFile.parentFile?.mkdirs()
+                        if (!mediaFile.renameTo(newFile)) {
                             throw SecurityException(
                                 "Moving a file into the non-default top level folder " +
                                         "$folderName unexpectedly requires MANAGE_EXTERNAL_STORAGE " +
                                         "permission. The default folders are: ${folders.values.flatten()}"
                             )
                         }
-                        return absTarget
+                        return newFile
                     }
                 } else {
                     // Creates all parent folders for us if needed. Here used to be "Nice and simple as
@@ -2977,53 +3082,10 @@ object MediaStoreCompat {
                             }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
-                    return absTarget
+                    return newFile
                 }
             }
-        }
-        queryMissing(context, uri, ownerPackageName, mediaType, isDownload,
-            mediaFile, needsOwner = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q,
-            needsFile = true, needsType = true, needsIsDownload = Build.VERSION.SDK_INT == Build.
-            VERSION_CODES.Q) { ownerPackageNameH, mediaTypeH, isDownloadH, mediaFileH ->
-            ownerPackageName = ownerPackageNameH
-            mediaType = mediaTypeH
-            isDownload = isDownloadH
-            mediaFile = mediaFileH
-        }
-        if (volume != null && mediaFile!!.toRelativeString(volume
-                .requireCanonicalDirectory()).startsWith("../")) {
-            throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
-        }
-        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-        volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-        val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
-        if (newFile.exists()) {
-            throw IllegalArgumentException("Target file exists: $newFile")
-        }
-        if (!mediaFile.exists()) {
-            if (mediaType == MEDIA_TYPE_PLAYLIST && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                // Abstract playlists _can_ move
-                context.checkGrantSelfUriPermission(@Suppress("deprecation")
-                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                if (context.contentResolver.update(ContentUris.withAppendedId(
-                    @Suppress("deprecation") MediaStore.Audio.Playlists
-                        .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
-                    ContentValues().apply {
-                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
-                            File(newRelativePath).nameWithoutExtension)
-                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
-                            newFile.absolutePath)
-                    }, null, null) != 1)
-                    throw IllegalStateException("Failed to rename abstract playlist")
-                return newFile
-            }
-            throw IllegalArgumentException("File that doesn't exist can't move: $mediaFile")
-        }
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+        } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
             // Q move doesn't allow Files and Playlist collections (but Downloads is allowed oddly
             // enough). This is then combined with permission checks for everything except Downloads
             // (thus possible to bypass the primary-volume-or-owned-files-only restriction for
@@ -3295,12 +3357,12 @@ object MediaStoreCompat {
                             if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
                                 supportsWriteRequestForSidecar())
                                 throw IllegalStateException("Failed to update file $uri in MediaStore")
-                            scanFile(context, newFile.absolutePath)
                             Thread {
                                 // fire and forget to background thread to ignore waiting but
                                 // still log timeouts etc...
                                 scanFile(context, uri)
                             }.start()
+                            getMediaUriForFile(context, newFile.absolutePath)
                         }
                         return newFile
                     } else {
@@ -3823,11 +3885,17 @@ object MediaStoreCompat {
         val path = volume.requireCanonicalDirectory().resolve(fileRelative)
         if (path.exists()) {
             // Do a good deed
-            scanFile(context, path.absolutePath)
+            try {
+                getMediaUriForFile(context, path.absolutePath)
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to scan file", e)
+            }
             throw IOException("File exists: $path")
         }
         // If there's another dead column with this path, insert will fail spectacularly
         // So, delete it. (But only if the file doesn't exist, or we might cause data loss.)
+        // Potential data loss is also why abstract playlists are excluded on the versions where
+        // they exist.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 context.contentResolver.delete(FILES_EXTERNAL_CONTENT_URI, Bundle().apply {
@@ -3843,20 +3911,56 @@ object MediaStoreCompat {
                 context.contentResolver.delete(
                     @Suppress("deprecation")
                     MediaStore.setIncludePending(FILES_EXTERNAL_CONTENT_URI),
-                    "${MediaStore.Files.FileColumns.DATA} = ?", arrayOf(
-                        path.absolutePath
-                    )
+                    "${MediaStore.Files.FileColumns.DATA} = ? AND" +
+                            " ${MediaStore.Files.FileColumns.MEDIA_TYPE} != $MEDIA_TYPE_PLAYLIST",
+                    arrayOf(path.absolutePath)
                 )
             } else {
                 context.contentResolver.delete(
                     FILES_EXTERNAL_CONTENT_URI,
-                    "${MediaStore.Files.FileColumns.DATA} = ?", arrayOf(
-                        path.absolutePath
-                    )
+                    "${MediaStore.Files.FileColumns.DATA} = ? AND" +
+                            " ${MediaStore.Files.FileColumns.MEDIA_TYPE} != $MEDIA_TYPE_PLAYLIST",
+                    arrayOf(path.absolutePath)
                 )
             }
         } catch (t: Throwable) {
             Log.w(TAG, "failed to delete duplicates", t)
+        }
+        if (mimeType != DocumentsContract.Document.MIME_TYPE_DIR) {
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                context.contentResolver.query(
+                    FILES_EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Files.FileColumns._ID),
+                    Bundle().apply {
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                            "${MediaStore.Files.FileColumns.DATA} = ?")
+                        putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                            arrayOf(path.absolutePath))
+                        putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+                        putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                    },
+                    null
+                )
+            } else {
+                context.contentResolver.query(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        @Suppress("deprecation")
+                        MediaStore.setIncludePending(FILES_EXTERNAL_CONTENT_URI)
+                    else FILES_EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Files.FileColumns._ID),
+                    "${MediaStore.Files.FileColumns.DATA} = ?",
+                    arrayOf(path.absolutePath),
+                    null
+                )
+            }).use { cursor ->
+                if (cursor != null && cursor.moveToFirst()) {
+                    throw IllegalArgumentException("There is a conflicting row which could not be " +
+                            "automatically cleaned up which would cause create to fail: " +
+                            ContentUris.withAppendedId(FILES_EXTERNAL_CONTENT_URI,
+                                cursor.getLong(cursor.getColumnIndexOrThrow(
+                                    MediaStore.Files.FileColumns._ID))))
+                }
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
