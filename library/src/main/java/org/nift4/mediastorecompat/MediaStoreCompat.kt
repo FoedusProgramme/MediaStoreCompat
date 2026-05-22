@@ -2736,9 +2736,10 @@ object MediaStoreCompat {
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         val inputStream = openInputStream(context, uri, ownerPackageName,
             mediaType, mediaFile, isManager, volumesCache, persistedUriPermissionsCache)!!
+        var uri = uri
         var newUri: Uri? = null
         try {
-            markIsTrashedStatus(
+            uri = markIsTrashedStatus(
                 context, uri, true, ownerPackageName, mediaType, isDownload,
                 mediaFile, isManager, volumesCache, persistedUriPermissionsCache)
             step = 1
@@ -2817,6 +2818,10 @@ object MediaStoreCompat {
      *
      * [newPathAndName] may be absolute on the mounted volume the file already resides on, or
      * relative to the root of the file's volume.
+     *
+     * Caution: if [android.provider.DocumentsProvider.renameDocument] has to be used on Android 11
+     * for a subtitle or playlist file, the media ID might change. Use [getMediaUriForFile] with the
+     * returned file to obtain it.
      *
      * Copying move is the act of creating the target file, opening the source file for read, then
      * reading from source and writing to target until all contents are copied, and then deleting
@@ -4606,7 +4611,7 @@ object MediaStoreCompat {
                     mediaFile = mediaFileH
                     ownerPackageName = ownerPackageNameH
                 }
-                if (isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE
+                if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_SUBTITLE
                             || mediaType == MEDIA_TYPE_PLAYLIST)) {
                     val uri = getDocumentUriEx(context, mediaUri, mediaFile,
                         forWrite = true, volumesCache = volumesCache,
@@ -4983,6 +4988,11 @@ object MediaStoreCompat {
      * [android.provider.DocumentsProvider.renameDocument] (for Android 11 only, for playlists or
      * subtitle files) as needed.
      *
+     * Caution: if [android.provider.DocumentsProvider.renameDocument] has to be used, which can
+     * only happen on Android 11 and no lower nor higher version, the media ID might change. The new
+     * ID is returned as part of a valid media [Uri]. In all other cases the media [Uri] is returned
+     * unmodified.
+     *
      * Note: folders can be trashed, but all files inside the folder have to be trashed separately.
      * TODO: really? or is trashing folders only since S since trashFile API is S+?
      *  and if that _is_ true then the method should do it recursively by itself?
@@ -4995,7 +5005,7 @@ object MediaStoreCompat {
                             isDownload: Boolean? = false, mediaFile: File? = null,
                             isManager: Boolean? = null,
                             volumesCache: List<StorageVolumeCompat>? = null,
-                            persistedUriPermissionsCache: List<UriPermission>? = null) {
+                            persistedUriPermissionsCache: List<UriPermission>? = null): Uri {
         var ownerPackageName = ownerPackageName
         var mediaType = mediaType
         var mediaFile = mediaFile
@@ -5019,15 +5029,15 @@ object MediaStoreCompat {
                         mediaType == MEDIA_TYPE_SUBTITLE)) {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 if (isTrashed == mediaFile!!.name.startsWith(".trashed-"))
-                    return
+                    return uri
                 val path = mediaFile.resolveSibling(if (isTrashed) ".trashed-" +
                         "${System.currentTimeMillis() / 1000L + 30 * 24 * 60 * 60}-" +
                         "${mediaFile.name}" else mediaFile.name.substring(".trashed-"
                             .length).substringAfter('-')).absolutePath
-                efficientMove(context, uri, path, ownerPackageName,
+                val file = efficientMove(context, uri, path, ownerPackageName,
                     mediaType, isDownload, mediaFile, false, volumesCache,
                     persistedUriPermissionsCache)
-                return
+                return getMediaUriForFile(context, file.path)
             }
         }
         val values = ContentValues()
@@ -5069,6 +5079,7 @@ object MediaStoreCompat {
         if (context.contentResolver.update(uri, values, null, null) != 1) {
             throw IllegalStateException("failed to mark $uri as trashed: update() returned 0")
         }
+        return uri
     }
 
     /**
