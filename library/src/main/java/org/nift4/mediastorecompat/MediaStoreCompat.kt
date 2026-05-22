@@ -820,12 +820,15 @@ object MediaStoreCompat {
             !StorageManagerCompat.getExternalStoragePath(documentId).startsWith("./")) {
             // In R you cannot get access to whole volume in a normal way, but you can get Volume/.
             // see https://cs.android.com/android/_/android/platform/frameworks/base/+/8b55dd05ce694a97123fafa3f01c4f4dfe4854d9
-            return getPrefixForDocument(context,
+            val ret = getPrefixForDocument(context,
                 StorageManagerCompat.buildExternalStorageDocumentId(
                     StorageManagerCompat.getExternalStorageVolumeName(documentId),
                     "./" + StorageManagerCompat.getExternalStoragePath(documentId)
                 ), forWrite, // only persisted tree mode would use this hack from our side
                 ResolvePermissions.OnlyPersistedTree, persistedUriPermissionsCache)
+            if (ret == null)
+                return null
+            return DocumentsContract.buildDocumentUriUsingTree(ret, documentId)
         }
         return ret
     }
@@ -3306,9 +3309,7 @@ object MediaStoreCompat {
             )
             if (safUri is Uri && safTargetUri is Uri) {
                 val safId = DocumentsContract.getDocumentId(safUri)
-                val oldPath = File(StorageManagerCompat.getExternalStoragePath(safId).let {
-                    if (it.startsWith("./")) it.substring(2) else
-                        if (it == ".") "" else it })
+                val oldPath = File(StorageManagerCompat.getExternalStoragePath(safId))
                 val oldParent = DocumentsContract.buildDocumentUriUsingTree(
                     safUri,
                     StorageManagerCompat.buildExternalStorageDocumentId(
