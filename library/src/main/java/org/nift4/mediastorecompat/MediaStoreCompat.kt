@@ -3263,8 +3263,12 @@ object MediaStoreCompat {
                                     @Suppress("deprecation") MediaStore.Audio.Playlists
                                         .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
                                     ContentValues().apply {
-                                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
-                                            newFile.nameWithoutExtension)
+                                        if (!newFile.name.startsWith(".pending-")
+                                            && !newFile.name.startsWith(".trashed-")) {
+                                            put(@Suppress("deprecation")
+                                                MediaStore.Audio.Playlists.NAME,
+                                                newFile.nameWithoutExtension)
+                                        }
                                         put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
                                             newFile.absolutePath)
                                     }, null, null) != 1)
@@ -3678,6 +3682,15 @@ object MediaStoreCompat {
             if (!DocumentsContract.deleteDocument(context.contentResolver,
                     safUri))
                 throw IOException("failed to delete $safUri")
+            try {
+                // ContentResolver.delete() is required for (abstract) playlists to delete properly
+                if (context.contentResolver.delete(uri, null, null) == 1)
+                    return
+                throw IllegalArgumentException("nothing was deleted: $uri")
+            } catch (e: Exception) {
+                Log.w(TAG, "failed to tell mediastore to delete file", e)
+            }
+            scanFile(context, mediaFile.absolutePath)
             return
         }
         if (failed != null)
