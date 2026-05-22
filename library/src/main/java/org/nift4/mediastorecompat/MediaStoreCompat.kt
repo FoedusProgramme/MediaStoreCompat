@@ -3266,8 +3266,7 @@ object MediaStoreCompat {
                                     @Suppress("deprecation") MediaStore.Audio.Playlists
                                         .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
                                     ContentValues().apply {
-                                        if (!newFile.name.startsWith(".pending-")
-                                            && !newFile.name.startsWith(".trashed-")) {
+                                        if (!newFile.name.startsWith(".pending-")) {
                                             put(@Suppress("deprecation")
                                                 MediaStore.Audio.Playlists.NAME,
                                                 newFile.nameWithoutExtension)
