@@ -2756,7 +2756,7 @@ object MediaStoreCompat {
             }
             step = 3
             inputStream.close()
-            delete(context, uri, ownerPackageName, mediaType, isDownload, mediaFile, isManager,
+            delete(context, uri, ownerPackageName, mediaType, isDownload, null, isManager,
                 volumesCache, persistedUriPermissionsCache)
             step = 4
             finishCreate(context, newUri, mediaFile, volumesCache)
@@ -2765,8 +2765,8 @@ object MediaStoreCompat {
             try {
                 if (step in 1..3) {
                     markIsTrashedStatus(
-                        context, uri, false, ownerPackageName, mediaType,
-                        isDownload, mediaFile, isManager, volumesCache, persistedUriPermissionsCache
+                        context, uri, false, ownerPackageName, mediaType, isDownload,
+                        null, isManager, volumesCache, persistedUriPermissionsCache
                     )
                 }
                 if (step == 2) {
