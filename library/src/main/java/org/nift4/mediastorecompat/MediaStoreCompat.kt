@@ -3021,10 +3021,24 @@ object MediaStoreCompat {
                                 MediaStore.Files.FileColumns._ID))))
             }
         }
-        val pattern = Regex("""\.(?:pending|trashed)-\d+-(.+)""")
-        val match = pattern.matchEntire(newFile.name)
-        val playlistName = if (match != null) match.groupValues[1] else newFile.nameWithoutExtension
+        var displayName = newFile.name
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val pattern = Regex("""\.(pending|trashed)-\d+-(.+)""")
+            val match = pattern.matchEntire(newFile.name)
+            var shouldBePendingR = false
+            var shouldBeTrashed = false
+            if (match != null) {
+                shouldBePendingR = match.groupValues[1] == "pending"
+                shouldBeTrashed = match.groupValues[1] == "trashed"
+                displayName = match.groupValues[2]
+            }
+            val match2 = pattern.matchEntire(mediaFile.name)
+            var isPendingR = false
+            var isTrashed = false
+            if (match2 != null) {
+                isPendingR = match2.groupValues[1] == "pending"
+                isTrashed = match2.groupValues[1] == "trashed"
+            }
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_SUBTITLE && mediaType
                         != MEDIA_TYPE_PLAYLIST) || isManager!!
                 || isOwned(context, ownerPackageName!!)) {
@@ -3056,7 +3070,8 @@ object MediaStoreCompat {
                             }
                             if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                     put(@Suppress("deprecation")
-                                    MediaStore.Audio.Playlists.NAME, playlistName)
+                                    MediaStore.Audio.Playlists.NAME, displayName
+                                        .substringAfterLast('.', ""))
                                     if (mimeType != null) {
                                         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                                     }
@@ -3113,16 +3128,25 @@ object MediaStoreCompat {
                     // also works for folders if you know their IDs
                     if (context.contentResolver.update(uri, ContentValues().apply {
                             put(MediaStore.MediaColumns.RELATIVE_PATH, newPath.parent ?: "")
-                            put(MediaStore.MediaColumns.DISPLAY_NAME, newPath.name)
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                            // By adding IS_PENDING field, scan will be triggered, skip this if we
+                            // don't actually change that field.
+                            if (shouldBePendingR != isPendingR) {
+                                put(MediaStore.MediaColumns.IS_PENDING,
+                                    if (shouldBePendingR) 1 else 0)
+                            }
+                            if (shouldBeTrashed != isTrashed) {
+                                put(MediaStore.MediaColumns.IS_TRASHED,
+                                    if (shouldBeTrashed) 1 else 0)
+                            }
                             if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
                                 if (mimeType != null) {
                                     put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                                 }
                                 if (!skipPlaylistName) {
-                                    put(
-                                        @Suppress("deprecation")
-                                        MediaStore.Audio.Playlists.NAME, playlistName
-                                    )
+                                    put(@Suppress("deprecation")
+                                    MediaStore.Audio.Playlists.NAME, displayName.substringAfterLast(
+                                        '.', ""))
                                 }
                             }
                         }, null, null) != 1)
@@ -3135,7 +3159,8 @@ object MediaStoreCompat {
                         )
                         if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                 put(@Suppress("deprecation")
-                                MediaStore.Audio.Playlists.NAME, playlistName)
+                                MediaStore.Audio.Playlists.NAME, displayName
+                                    .substringAfterLast('.', ""))
                                 if (mimeType != null) {
                                     put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                                 }
@@ -3316,7 +3341,7 @@ object MediaStoreCompat {
                                         put(@Suppress("deprecation")
                                         MediaStore.Audio.Playlists.IS_PENDING, 0)
                                         put(@Suppress("deprecation")
-                                        MediaStore.Audio.Playlists.NAME, playlistName)
+                                        MediaStore.Audio.Playlists.NAME, newFile.nameWithoutExtension)
                                     }, null, null) != 1)
                                 throw IllegalStateException("Failed to update playlist in MediaStore")
                         } else {
@@ -3366,7 +3391,7 @@ object MediaStoreCompat {
                             .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
                         ContentValues().apply {
                             put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
-                                playlistName)
+                                newFile.nameWithoutExtension)
                             put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
                                 newFile.absolutePath)
                         }, null, null) != 1)
@@ -3447,8 +3472,9 @@ object MediaStoreCompat {
                             context.contentResolver.update(playlistUri, ContentValues()
                                 .apply {
                                     if (!skipPlaylistName) {
-                                        put(@Suppress("deprecation")
-                                            MediaStore.Audio.Playlists.NAME, playlistName)
+                                        put(@Suppress("deprecation") MediaStore.Audio
+                                            .Playlists.NAME, displayName.substringAfterLast(
+                                            '.', ""))
                                     }
                                     put(@Suppress("deprecation")
                                         MediaStore.Audio.Playlists.DATA, newFile.absolutePath)
