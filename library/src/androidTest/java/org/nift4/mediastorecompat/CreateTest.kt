@@ -20,7 +20,6 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.ext.SdkExtensions
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.test.platform.app.InstrumentationRegistry

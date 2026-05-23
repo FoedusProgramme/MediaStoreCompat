@@ -428,6 +428,9 @@ object MediaStoreCompat {
                             MediaStore.MediaColumns.VOLUME_NAME
                         )
                     ) else null
+                // Once/if we can ever deprecate Audio.Playlists Uri usage here entirely, we should
+                // look into rewriting these Uris on the modern Android versions here as we wouldn't
+                // want to poison the app with deprecated Uris if not needed.
                 return ContentUris.withAppendedId(
                     getBaseUriForMediaType(
                         volumeName,
@@ -1417,6 +1420,9 @@ object MediaStoreCompat {
         ) { _, mediaUri -> result.set(mediaUri); latch.countDown() }
         if (!latch.await(10, TimeUnit.SECONDS))
             throw IllegalStateException("Timed out")
+        // Once/if we can ever deprecate Audio.Playlists Uri usage here entirely, we should look
+        // into rewriting these Uris on the modern Android versions here as we wouldn't want to
+        // poison the app with deprecated Uris if not needed.
         return result.get()
     }
 
@@ -1647,14 +1653,13 @@ object MediaStoreCompat {
                         // manually because in projection it's allowed (will get NULLed for
                         // privacy if we can't see the actual owner, but it's ok, we just want
                         // to filter out files we ourselves own).
-                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
-                            "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'")
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "LOWER(" +
+                                "${MediaStore.MediaColumns.DATA}) NOT REGEXP '/\\.pending-[^/]+$'")
                     } else {
-                        putString(
-                            ContentResolver.QUERY_ARG_SQL_SELECTION,
-                            "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'" +
-                                    " AND (${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} != ?" +
-                                    " OR ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NULL)")
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "LOWER(" +
+                                "${MediaStore.MediaColumns.DATA}) NOT REGEXP '/\\.pending-[^/]+$'" +
+                                " AND (${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} != ?" +
+                                " OR ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NULL)")
                         putStringArray(
                             ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
                             arrayOf(context.packageName)) // TODO support shared uid? or not?
@@ -3023,7 +3028,8 @@ object MediaStoreCompat {
         }
         var displayName = newFile.name
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val pattern = Regex("""\.(pending|trashed)-\d+-(.+)""")
+            val pattern = Regex("""\.(pending|trashed)-\d+-(.+)""",
+                RegexOption.IGNORE_CASE)
             val match = pattern.matchEntire(newFile.name)
             var shouldBePendingR = false
             var shouldBeTrashed = false
@@ -3071,7 +3077,7 @@ object MediaStoreCompat {
                             if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                     put(@Suppress("deprecation")
                                     MediaStore.Audio.Playlists.NAME, displayName
-                                        .substringAfterLast('.', ""))
+                                        .substringBeforeLast('.'))
                                     if (mimeType != null) {
                                         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                                     }
@@ -3145,8 +3151,8 @@ object MediaStoreCompat {
                                 }
                                 if (!skipPlaylistName) {
                                     put(@Suppress("deprecation")
-                                    MediaStore.Audio.Playlists.NAME, displayName.substringAfterLast(
-                                        '.', ""))
+                                    MediaStore.Audio.Playlists.NAME, displayName
+                                        .substringBeforeLast('.'))
                                 }
                             }
                         }, null, null) != 1)
@@ -3160,7 +3166,7 @@ object MediaStoreCompat {
                         if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                 put(@Suppress("deprecation")
                                 MediaStore.Audio.Playlists.NAME, displayName
-                                    .substringAfterLast('.', ""))
+                                    .substringBeforeLast('.'))
                                 if (mimeType != null) {
                                     put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                                 }
@@ -3473,8 +3479,8 @@ object MediaStoreCompat {
                                 .apply {
                                     if (!skipPlaylistName) {
                                         put(@Suppress("deprecation") MediaStore.Audio
-                                            .Playlists.NAME, displayName.substringAfterLast(
-                                            '.', ""))
+                                            .Playlists.NAME, displayName
+                                                .substringBeforeLast('.'))
                                     }
                                     put(@Suppress("deprecation")
                                         MediaStore.Audio.Playlists.DATA, newFile.absolutePath)
@@ -4109,10 +4115,19 @@ object MediaStoreCompat {
             val forceMove = folders.values.find { it.contains(folderName) } == null &&
                     Build.VERSION.SDK_INT == Build.VERSION_CODES.R && folderName == "Recordings" &&
                     !(isManager ?: isManager(context))
+            // Regarding the playlist check: the Audio.Playlists Uris as a whole are deprecated, and
+            // there is indeed a fully featured alternative available through the Files Uris. The
+            // issue is that create*Request and markIsFavoriteStatus don't accept them, but that is
+            // no issue for files we create ourselves, so we can do this just fine. Sadly, because
+            // there's no way to gain access to the equivalent Files Uri even if we have access to
+            // the Audio.Playlists Uri, we have to keep support for writing to the Audio.Playlists
+            // variant everywhere.
+            // TODO: file AOSP bug regarding markIsFavoriteStatus not accepting the Files Uris
             val outMediaType = if (forceMove || folders[MEDIA_TYPE_NONE]!!.contains(folderName) &&
                 folders[mediaType]?.contains(folderName) == false &&
                 folderName != Environment.DIRECTORY_DOWNLOADS &&
-                canInsertIntoNoneWithRealMime(mediaType)) MEDIA_TYPE_NONE else mediaType
+                canInsertIntoNoneWithRealMime(mediaType) || mediaType == MEDIA_TYPE_PLAYLIST)
+                MEDIA_TYPE_NONE else mediaType
             val insPath = if (forceMove) File("Downloads/${System.currentTimeMillis()}" +
                     "_${fileRelative.name}") else if (needNoneWorkaround) File("Movies/"
                     + "${System.currentTimeMillis()}_${fileRelative.name}") else fileRelative
@@ -5284,23 +5299,21 @@ object MediaStoreCompat {
                     )).toUri()
             } else uri
         } else uri
-        if (isAffectedByPlaylistMimeReset()) {
-            if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
-                val mimeType = context.contentResolver.query(
-                    uri,
-                    arrayOf(MediaStore.MediaColumns.MIME_TYPE), null,
-                    null
-                ).use { cursor ->
-                    if (cursor == null || !cursor.moveToFirst())
-                        throw IllegalArgumentException("Can't resolve media Uri: $uri")
-                    cursor.getString(
-                        cursor.getColumnIndexOrThrow(
-                            MediaStore.MediaColumns.MIME_TYPE
-                        )
+        if (isAffectedByPlaylistMimeReset() && guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+            val mimeType = context.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.MIME_TYPE), null,
+                null
+            ).use { cursor ->
+                if (cursor == null || !cursor.moveToFirst())
+                    throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                cursor.getString(
+                    cursor.getColumnIndexOrThrow(
+                        MediaStore.MediaColumns.MIME_TYPE
                     )
-                }
-                values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                )
             }
+            values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
         }
         values.put(MediaStore.MediaColumns.IS_TRASHED, if (isTrashed) 1 else 0)
         if (context.contentResolver.update(uri, values, null, null) != 1) {
