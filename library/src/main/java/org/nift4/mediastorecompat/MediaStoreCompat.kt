@@ -18,6 +18,7 @@ package org.nift4.mediastorecompat
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AppOpsManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipDescription
@@ -2687,15 +2688,31 @@ object MediaStoreCompat {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                 volume.mediaStoreVolumeName else null, ResolvePermissions.OnlyPersistedTree,
                 true, volumesCache, persistedUriPermissionsCache)
-        if (safUri !is String)
+        if (safUri !is String) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && safUri is Uri &&
+                isAffectedByBug258270138(context)) {
+                return RequestToken.Uri(null, false)
+            }
             return null
-        return if (!volume.isPrimary && (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
-                    Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && !isMediaTypeForQ(mediaType!!))
-            || Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R || !volume.isPrimary &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !isMediaTypeForQ(mediaType!!))) {
             RequestToken.Uri(safUri, false)
         } else {
             RequestToken.Manager
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    internal fun isAffectedByBug258270138(
+        context: Context
+    ): Boolean {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val packageInfo = context.packageManager.getApplicationInfo(
+            "com.android.externalstorage", 0)
+        val mode = appOps.checkOpNoThrow("android:manage_external_storage", packageInfo.uid,
+            "com.android.externalstorage")
+        return mode != AppOpsManager.MODE_ALLOWED
     }
 
     private fun isAndroidMediaFolder(context: Context, folder: String): Boolean {
@@ -5896,7 +5913,7 @@ object MediaStoreCompat {
                     uris2 = uris.mapNotNull { if (it.startsWith("content"))
                         it.toUri() else { urisForSaf += it; null } }
                 }
-                if (uris2.isNotEmpty() || urisForSaf.isNullOrEmpty()) try {
+                if (uris2.isNotEmpty()) try {
                     out = MediaStore.createWriteRequest(context.contentResolver, uris2)
                 } catch (e: Exception) {
                     if (e is IllegalArgumentException && e.message == "All requested items must" +
@@ -5945,10 +5962,10 @@ object MediaStoreCompat {
                         }}", e)
                     throw e
                 }
-                if (urisForSaf.isNullOrEmpty()) {
-                    return out!!
+                if (out != null && urisForSaf.isNullOrEmpty()) {
+                    return out
                 }
-                uris = urisForSaf
+                uris = urisForSaf ?: emptySet()
             }
             // The activity will always use the "Uris" list to decide what we need to request.
             // These two sets are just used to transmit suggestions on what to request (for

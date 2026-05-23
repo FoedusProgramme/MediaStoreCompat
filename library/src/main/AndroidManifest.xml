@@ -54,4 +54,7 @@
             android:exported="false"
             tools:targetApi="30" />
     </application>
+    <queries>
+        <package android:name="com.android.externalstorage"/>
+    </queries>
 </manifest>

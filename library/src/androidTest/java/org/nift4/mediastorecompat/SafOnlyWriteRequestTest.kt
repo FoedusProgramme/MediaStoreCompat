@@ -32,9 +32,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.nift4.mediastorecompat.TestBase.UriSubject.Companion.uris
 
-@SdkSuppress(maxSdkVersion = 29)
+@SdkSuppress(maxSdkVersion = 30)
 @RunWith(TestParameterInjector::class)
 class SafOnlyWriteRequestTest : SecondaryStoragePreparer(true) {
+
+    // TODO: on sdk 30, check internal storage and bug 258270138 workaround
 
     @Before
     fun prepare() {

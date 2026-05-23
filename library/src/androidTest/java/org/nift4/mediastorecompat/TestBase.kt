@@ -42,6 +42,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.shell.Shell
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.uiAutomator
 import com.google.common.truth.BooleanSubject
 import com.google.common.truth.Fact.simpleFact
@@ -102,6 +104,7 @@ abstract class TestBase {
 
     protected fun getSafUriOnSd(path: String, tree: String): Uri {
         val volumeCompat = getSdCard()
+        val tree = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.R) "./$tree" else tree
         return buildDocumentUriUsingTree(
             buildTreeDocumentUri(
                 StorageManagerCompat.AUTHORITY_EXTERNAL_STORAGE,
@@ -324,16 +327,37 @@ abstract class TestBase {
             if (folders != null) {
                 folders.forEach {
                     if (it == "..")
-                        pressBack()
+                        throw IllegalStateException()
                     else
                         onElement {
                             (packageName == "com.android.documentsui"
                                     || packageName == "com.google.android.documentsui") &&
                                     viewIdResourceName == "android:id/title" &&
                                     text?.contains(it) == true
-                        }.click()
+                        }.let { item ->
+                            val screenHeight = device.displayHeight
+                            val safeBottom = screenHeight - 200
+                            val nearBottom = item.visibleBounds.centerY() > safeBottom
+                            if (nearBottom) {
+                                val w = device.displayWidth
+                                val h = device.displayHeight
+                                device.swipe(
+                                    w / 2,
+                                    (h * 0.8).toInt(),
+                                    w / 2,
+                                    (h * 0.3).toInt(),
+                                    30
+                                )
+                                device.waitForIdle()
+                                device.waitForIdle()
+                            }
+                            val finalBounds = item.visibleBounds
+                            device.click(finalBounds.centerX(), finalBounds.centerY())
+                        }
                 }
-                onElement { viewIdResourceName == "android:id/button1" }.click()
+                onElement { (packageName == "com.android.documentsui"
+                        || packageName == "com.google.android.documentsui") &&
+                        viewIdResourceName == "android:id/button1" }.click()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     onElement { viewIdResourceName == "android:id/message" }
                     onElement { viewIdResourceName == "android:id/button1" }.click()

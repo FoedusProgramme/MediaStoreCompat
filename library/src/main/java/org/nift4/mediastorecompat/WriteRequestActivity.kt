@@ -87,8 +87,8 @@ internal class WriteRequestActivity : Activity() {
                 return
             }
             val uris = intent!!.getStringArrayListExtra("Uris")
-            if (uris == null || (uris.isEmpty() && !needManager)) {
-                Log.e(TAG, "null/empty list of uris: $uris")
+            if (uris == null) {
+                Log.e(TAG, "null list of uris: $uris")
                 setResult(RESULT_CANCELED)
                 finish()
                 return
@@ -103,12 +103,6 @@ internal class WriteRequestActivity : Activity() {
             val safIds = intent!!.getStringArrayListExtra("SafSuggest")
             if (safIds == null) {
                 Log.e(TAG, "null list of saf ids: $safIds")
-                setResult(RESULT_CANCELED)
-                finish()
-                return
-            }
-            if (safIds.isEmpty() && yesNoIds.isEmpty() && !needManager) {
-                Log.e(TAG, "empty list of saf and yes no ids: $safIds + $yesNoIds")
                 setResult(RESULT_CANCELED)
                 finish()
                 return
@@ -355,7 +349,26 @@ internal class WriteRequestActivity : Activity() {
         }
         // Time for the next round of telling the user what to do
         val volumes = StorageManagerCompat.getStorageVolumes(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !nextIsSaf &&
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            MediaStoreCompat.isAffectedByBug258270138(this)) {
+            if (rationaleState) {
+                Log.e(TAG, "user didn't grant ExternalStorageProvider SAF permission")
+                setResult(RESULT_CANCELED)
+                finish()
+                return
+            }
+            rationaleState = true
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+            intent.setData("package:com.android.externalstorage".toUri())
+            try {
+                startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                Log.e(TAG, "can't ask for manager for externalstorage", e)
+                setResult(RESULT_CANCELED)
+                finish()
+                return
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !nextIsSaf &&
             Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && yesNoIds.isNotEmpty()
         ) {
             val id = yesNoIds.first()
