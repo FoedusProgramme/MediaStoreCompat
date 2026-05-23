@@ -38,7 +38,7 @@ class CreateTest(
     @param:TestParameter
     private val isSd: Boolean
 ) : SecondaryStoragePreparer(isSd) {
-    @TestParameter("docx", "mp3", "mp4", "txt", "pls", "m3u", "jpg", "wpl", "xspf", "abcd")
+    @TestParameter("docx", "mp3", "mp4", "txt", "lrc", "pls", "m3u", "jpg", "wpl", "xspf", "abcd")
     private var ext: String = "null"
 
     @TestParameter("Music", "DCIM", "Pictures", "Playlists", "Download", "Documents",
@@ -61,14 +61,7 @@ class CreateTest(
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
             if (ext == "pls" || ext == "wpl" || ext == "m3u") return false
         }
-        if (folder == "Documents" || folder == "Download") {
-            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.R
-                && SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) < 2) {
-                return !(ext == "pls" || ext == "wpl" || ext == "m3u" || ext == "srt" ||
-                        ext == "ttml" || ext == "lrc" || ext == "xspf")
-            }
-            return true
-        }
+        if (folder == "Documents" || folder == "Download") return true
         if (ext == "mp3" && folder == "Music") return true
         if (ext == "mp3" && folder == "Podcasts") return true
         if (ext == "mp4" && folder == "Movies") return true
@@ -85,6 +78,8 @@ class CreateTest(
             if (ext == "pls" && folder == "Movies") return true
             if (ext == "wpl" && folder == "Movies") return true
             if (ext == "m3u" && folder == "Movies") return true
+            if (ext == "lrc" && folder == "Music") return true
+            if (ext == "lrc" && folder == "Movies") return true
         }
         return false
     }
@@ -222,6 +217,17 @@ class CreateTest(
                 writer.write("hello world")
             }
         }
+        context.contentResolver.query(ContentUris.withAppendedId(
+            MediaStoreCompat.FILES_EXTERNAL_CONTENT_URI,
+            ContentUris.parseId(uri)),
+            arrayOf(MediaStore.Files.FileColumns.IS_PENDING), null,
+            null, null).use { cursor ->
+            if (cursor == null || !cursor.moveToFirst())
+                throw IllegalArgumentException("Failed to query $uri")
+            val isPending = cursor.getInt(cursor.getColumnIndexOrThrow(
+                MediaStore.Files.FileColumns.IS_PENDING))
+            assertThat(isPending).isEqualTo(1)
+        }
         MediaStoreCompat.finishCreate(context, uri)
         assertThat(
             executeShellCommand("cat ${getPath()}/$folder/test.$ext")
@@ -229,7 +235,8 @@ class CreateTest(
         context.contentResolver.query(ContentUris.withAppendedId(
             MediaStoreCompat.FILES_EXTERNAL_CONTENT_URI,
             ContentUris.parseId(uri)),
-            arrayOf(MediaStore.Files.FileColumns.MEDIA_TYPE), null,
+            arrayOf(MediaStore.Files.FileColumns.MEDIA_TYPE,
+                MediaStore.Files.FileColumns.IS_PENDING), null,
             null, null).use { cursor ->
             if (cursor == null || !cursor.moveToFirst())
                 throw IllegalArgumentException("Failed to query $uri")
@@ -238,14 +245,23 @@ class CreateTest(
             assertThat(mediaType).isEqualTo(MediaStoreCompat.getMediaTypeForMime(
                 MediaStoreCompat.guessMimeTypeFromFileName(
                     "${getPath()}/$folder/test.$ext")))
+            val isPending = cursor.getInt(cursor.getColumnIndexOrThrow(
+                MediaStore.Files.FileColumns.IS_PENDING))
+            assertThat(isPending).isEqualTo(0)
         }
+        MediaStoreCompat.efficientMove(context, uri, "$folder/test2.$ext")
+        assertThat(
+            executeShellCommand("cat ${getPath()}/$folder/test2.$ext")
+        ).isEqualTo("hello world")
     }
 
     @After
     fun cleanUp() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val uri = MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test.$ext")
+        val uri2 = MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test2.$ext")
         executeShellCommand("rm ${getPath()}/$folder/test.$ext")
+        executeShellCommand("rm ${getPath()}/$folder/test2.$ext")
         if (uri != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.R)
             try {
                 MediaStoreCompat.delete(context, uri)
@@ -253,8 +269,16 @@ class CreateTest(
                 if (e.message?.contains("Missing file for") != true)
                     throw e
             }
+        if (uri2 != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.R)
+            try {
+                MediaStoreCompat.delete(context, uri2)
+            } catch (e: Exception) {
+                if (e.message?.contains("Missing file for") != true)
+                    throw e
+            }
         if (folder == "Customfolder123")
             executeShellCommand("rmdir ${getPath()}/$folder")
+        MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test2.$ext")
         MediaStoreCompat.scanFile(context, "${getPath()}/$folder/test.$ext")
         MediaStoreCompat.scanFile(context, "${getPath()}/$folder")
     }

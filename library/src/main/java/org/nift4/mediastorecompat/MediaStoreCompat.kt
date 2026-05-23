@@ -99,6 +99,8 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -980,8 +982,7 @@ object MediaStoreCompat {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun getOkFolders(mediaType: Int): Set<String> =
-        (folders[mediaType] ?: emptySet()) + (if (canInsertIntoNoneWithRealMime(mediaType))
-            folders[MEDIA_TYPE_NONE]!! else emptySet())
+        (folders[mediaType] ?: emptySet()) + folders[MEDIA_TYPE_NONE]!!
 
     private fun computeFileAndMime(file: File, mimeType: String?): Pair<File, String> {
         var file = file
@@ -3042,9 +3043,23 @@ object MediaStoreCompat {
                                 @Suppress("deprecation")
                                 MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
                                 ContentUris.parseId(uri))
+                            var mimeType: String? = null
+                            if (isAffectedByPlaylistMimeReset()) {
+                                mimeType = context.contentResolver.query(playlistUri,
+                                    arrayOf(MediaStore.MediaColumns.MIME_TYPE),
+                                    null, null).use { cursor ->
+                                    if (cursor == null || !cursor.moveToFirst())
+                                        throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                                    cursor.getString(cursor.getColumnIndexOrThrow(
+                                        MediaStore.MediaColumns.MIME_TYPE))
+                                }
+                            }
                             if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                     put(@Suppress("deprecation")
                                     MediaStore.Audio.Playlists.NAME, playlistName)
+                                    if (mimeType != null) {
+                                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                                    }
                                 }, null, null) != 1)
                                 throw IllegalStateException("update() for playlist failed")
                         }
@@ -3081,8 +3096,8 @@ object MediaStoreCompat {
                         ContentUris.parseId(uri)
                     )
                     var mimeType: String? = null
-                    if (isAffectedByPlaylistMimeReset() &&
-                        guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+                    if (isAffectedByPlaylistMimeReset() && (!skipPlaylistName ||
+                        guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST)) {
                         mimeType = context.contentResolver.query(
                             uri, arrayOf(MediaStore.MediaColumns.MIME_TYPE),
                             null, null).use { cursor ->
@@ -3099,18 +3114,21 @@ object MediaStoreCompat {
                     if (context.contentResolver.update(uri, ContentValues().apply {
                             put(MediaStore.MediaColumns.RELATIVE_PATH, newPath.parent ?: "")
                             put(MediaStore.MediaColumns.DISPLAY_NAME, newPath.name)
-                            if (mimeType != null) {
-                                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                            }
-                            if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST &&
-                                !skipPlaylistName) {
-                                put(@Suppress("deprecation")
-                                MediaStore.Audio.Playlists.NAME, playlistName)
+                            if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST) {
+                                if (mimeType != null) {
+                                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                                }
+                                if (!skipPlaylistName) {
+                                    put(
+                                        @Suppress("deprecation")
+                                        MediaStore.Audio.Playlists.NAME, playlistName
+                                    )
+                                }
                             }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
                     if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName &&
-                        guessMediaTypeFromUri(uri) != mediaType) {
+                        guessMediaTypeFromUri(uri) != MEDIA_TYPE_PLAYLIST) {
                         val playlistUri = ContentUris.withAppendedId(
                             getBaseUriForMediaType(msv, mediaType),
                             ContentUris.parseId(uri)
@@ -3118,6 +3136,9 @@ object MediaStoreCompat {
                         if (context.contentResolver.update(playlistUri, ContentValues().apply {
                                 put(@Suppress("deprecation")
                                 MediaStore.Audio.Playlists.NAME, playlistName)
+                                if (mimeType != null) {
+                                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                                }
                             }, null, null) != 1)
                             throw IllegalStateException("update() for playlist failed")
                     }
@@ -3397,7 +3418,7 @@ object MediaStoreCompat {
                             moveResult, newPath.name)
                     } else moveResult
                     if (renameResult != null) {
-                        val rows = if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName) {
+                        val rows = if (mediaType == MEDIA_TYPE_PLAYLIST) {
                             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                                 context.checkGrantSelfUriPermission(
                                     @Suppress("deprecation")
@@ -3412,12 +3433,28 @@ object MediaStoreCompat {
                                 @Suppress("deprecation") MediaStore.Audio
                                     .Playlists.EXTERNAL_CONTENT_URI,
                                 ContentUris.parseId(uri))
+                            var mimeType: String? = null
+                            if (isAffectedByPlaylistMimeReset()) {
+                                mimeType = context.contentResolver.query(playlistUri,
+                                    arrayOf(MediaStore.MediaColumns.MIME_TYPE),
+                                    null, null).use { cursor ->
+                                    if (cursor == null || !cursor.moveToFirst())
+                                        throw IllegalArgumentException("Can't resolve media Uri: $uri")
+                                    cursor.getString(cursor.getColumnIndexOrThrow(
+                                        MediaStore.MediaColumns.MIME_TYPE))
+                                }
+                            }
                             context.contentResolver.update(playlistUri, ContentValues()
                                 .apply {
-                                    put(@Suppress("deprecation")
-                                        MediaStore.Audio.Playlists.NAME, playlistName)
+                                    if (!skipPlaylistName) {
+                                        put(@Suppress("deprecation")
+                                            MediaStore.Audio.Playlists.NAME, playlistName)
+                                    }
                                     put(@Suppress("deprecation")
                                         MediaStore.Audio.Playlists.DATA, newFile.absolutePath)
+                                    if (mimeType != null) {
+                                        put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                                    }
                                 }, null, null)
                         } else {
                             context.contentResolver.update(uri, ContentValues().apply {
@@ -4038,35 +4075,21 @@ object MediaStoreCompat {
                 return getBaseUriForMediaType(volume.mediaStoreVolumeName, mediaType,
                     folderName == Environment.DIRECTORY_DOWNLOADS)
             }
+            val needNoneWorkaround = !canInsertIntoNoneWithRealMime(mediaType) &&
+                    !(isManager ?: isManager(context)) && (folderName.equals(
+                Environment.DIRECTORY_DOWNLOADS, ignoreCase = true) || folderName
+                    .equals(Environment.DIRECTORY_DOCUMENTS, ignoreCase = true))
             // forceMove uses a bug in FUSE implementation to create file in non-default top level
             val forceMove = folders.values.find { it.contains(folderName) } == null &&
                     Build.VERSION.SDK_INT == Build.VERSION_CODES.R && folderName == "Recordings" &&
                     !(isManager ?: isManager(context))
-            if (forceMove &&
-                !volume.requireCanonicalDirectory().resolve("Recordings").isDirectory) {
-                val recordingsDir = volume.requireCanonicalDirectory().resolve("Recordings")
-                val safUri = getDocumentUriEx(context, null, recordingsDir,
-                    volume.mediaStoreVolumeName,
-                    ResolvePermissions.OnlyPersistedTree, forWrite = true, volumesCache,
-                    persistedUriPermissionsCache)
-                if (safUri is Uri) {
-                    mkdirsSaf(context.contentResolver, safUri,
-                        "Recordings")
-                } else {
-                    throw SecurityException(
-                        "Creating a file in the non-default top level folder $folderName that " +
-                                "doesn't exist would require creating it, but that needs" +
-                                " SAF or MANAGE_EXTERNAL_STORAGE permission. The default folders " +
-                                "are: ${folders.values.flatten()}"
-                    )
-                }
-            }
             val outMediaType = if (forceMove || folders[MEDIA_TYPE_NONE]!!.contains(folderName) &&
                 folders[mediaType]?.contains(folderName) == false &&
                 folderName != Environment.DIRECTORY_DOWNLOADS &&
                 canInsertIntoNoneWithRealMime(mediaType)) MEDIA_TYPE_NONE else mediaType
             val insPath = if (forceMove) File("Downloads/${System.currentTimeMillis()}" +
-                    "_${fileRelative.name}") else fileRelative
+                    "_${fileRelative.name}") else if (needNoneWorkaround) File("Movies/"
+                    + "${System.currentTimeMillis()}_${fileRelative.name}") else fileRelative
             // Creates all parent folders for us if needed. Nice and simple as usual :)
             // (It will throw if the folder is invalid)
             val ret = try {
@@ -4079,7 +4102,9 @@ object MediaStoreCompat {
                         put(MediaStore.MediaColumns.RELATIVE_PATH, insPath.parent)
                         put(MediaStore.MediaColumns.DISPLAY_NAME, insPath.name)
                         put(MediaStore.MediaColumns.MIME_TYPE, mimeTypeReal)
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        if (!forceMove && !needNoneWorkaround) { // Those will set pending in a sec
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
                     }, Bundle().apply {
                         if (relatedUri != null) {
                             putParcelable(MediaStore.QUERY_ARG_RELATED_URI, relatedUri)
@@ -4090,15 +4115,26 @@ object MediaStoreCompat {
                     e.addSuppressed(wrongMediaTypeException)
                 throw e
             }
-            if (forceMove) {
+            if (forceMove || needNoneWorkaround) {
+                openOutputStream(context, ret!!)!!.close()
                 val insPathAbs = volume.requireCanonicalDirectory().resolve(insPath)
-                insPathAbs.parentFile?.mkdirs()
-                if (!insPathAbs.renameTo(fileRelative)) {
+                path.parentFile?.mkdirs()
+                val pendingFile = path.resolveSibling(".pending-${System
+                    .currentTimeMillis() / 1000L + 30 * 24 * 60 * 60}-${path.name}")
+                try {
+                    Files.move(insPathAbs.toPath(), pendingFile.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE)
+                } catch (e: Exception) {
                     insPathAbs.delete()
+                    if (needNoneWorkaround) {
+                        throw SecurityException("Working around bug 166057832 failed", e)
+                    }
                     throw SecurityException("Creating a file in the non-default top level folder " +
-                            "$folderName unexpectedly requires MANAGE_EXTERNAL_STORAGE " +
-                            "permission. The default folders are: ${folders.values.flatten()}")
+                                "$folderName unexpectedly requires MANAGE_EXTERNAL_STORAGE " +
+                                "permission. The default folders are: ${folders.values.flatten()}",
+                        e)
                 }
+                return ret
             }
             return ret
         }
