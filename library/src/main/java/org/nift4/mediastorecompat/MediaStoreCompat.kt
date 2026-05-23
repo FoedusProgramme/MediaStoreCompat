@@ -3203,7 +3203,10 @@ object MediaStoreCompat {
                         mediaFileUsedToExist = mediaFile.exists()
                         targetFileUsedToNotExist = !newFile.exists()
                     } else {
-                        baseUri = if (isMovableForQ(mediaType))
+                        baseUri = if (isMovableForQ(mediaType) && folders[mediaType]!!.find {
+                            prefix -> newRelativePath.startsWith("$prefix/",
+                                ignoreCase = true) || newRelativePath.equals(prefix,
+                                ignoreCase = true) } != null)
                             getBaseUriForMediaType(volume.mediaStoreVolumeName, mediaType)
                         else null
                         if (baseUri != null) {
@@ -3528,7 +3531,7 @@ object MediaStoreCompat {
             }
         }
         val qRulesOk = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-                getOkFolders(mediaType!!).contains(rootFolder)
+                folders[mediaType!!]?.contains(rootFolder) == true
         val mask = if (qRulesOk) PERMISSION_EFFICIENT_MOVE_Q_RULES else if (
             folders.filter { isMovableForQ(it.key) }.entries.find { it.value.find {
                     prefix -> newParent.startsWith("$prefix/", ignoreCase = true) ||
