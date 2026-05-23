@@ -2085,8 +2085,13 @@ object MediaStoreCompat {
      */
     private const val PERMISSION_EFFICIENT_MOVE_Q_RULES = 0x40
 
+    /**
+     * Ability to call [efficientMove] (Q rules only, but mismatching media type rules are OK).
+     */
+    private const val PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX = 0x80
+
     private const val PERMISSION_EFFICIENT_MOVE_ANY = PERMISSION_EFFICIENT_MOVE or
-            PERMISSION_EFFICIENT_MOVE_Q_RULES
+            PERMISSION_EFFICIENT_MOVE_Q_RULES or PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX
 
     private fun guessMediaTypeFromUri(uri: Uri): Int? {
         return when {
@@ -2484,7 +2489,7 @@ object MediaStoreCompat {
                 // we don't need WRITE_EXTERNAL_STORAGE for Q
                 else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q || isManager) {
                     val volumeUri = FILES_EXTERNAL_CONTENT_URI
-                    val specificVolumeUri = if (mediaType != null && isMediaTypeForQ(mediaType))
+                    val specificTypeUri = if (mediaType != null && isMediaTypeForQ(mediaType))
                         getBaseUriForMediaType(null, mediaType)
                     else null
                     (try {
@@ -2507,9 +2512,9 @@ object MediaStoreCompat {
                             // also grant ourselves access to the specific table view if applicable to
                             // ensure any kind of access works no matter which view is used, just like
                             // in Android R
-                            if (specificVolumeUri != null) {
+                            if (specificTypeUri != null) {
                                 maybeGrantSelfUriPermission(
-                                    context, specificVolumeUri,
+                                    context, specificTypeUri,
                                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                                             or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                                             or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
@@ -2616,13 +2621,12 @@ object MediaStoreCompat {
                 )
                     flags = PERMISSION_UPDATE_SQL or PERMISSION_DELETE or
                             PERMISSION_OPEN_FD_FOR_WRITE
-                if (requestedPerm == PERMISSION_EFFICIENT_MOVE_Q_RULES) {
-                    // note: don't use isMediaTypeForQ() because Q movement doesn't support playlists
+                if (requestedPerm == PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX) {
+                    if (hasTablePermission)
+                        flags = flags or PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX
+                } else if (requestedPerm == PERMISSION_EFFICIENT_MOVE_Q_RULES) {
                     if ((flags and PERMISSION_UPDATE_SQL) != 0 &&
-                        (mediaType == MEDIA_TYPE_IMAGE
-                                || mediaType == MEDIA_TYPE_VIDEO
-                                || mediaType == MEDIA_TYPE_AUDIO
-                                || isDownload!!)
+                        (isMovableForQ(mediaType!!) || isDownload!!)
                     )
                         flags = flags or PERMISSION_EFFICIENT_MOVE_Q_RULES
                     else if (isManager && isDownload!!)
@@ -2867,7 +2871,7 @@ object MediaStoreCompat {
     fun efficientMove(context: Context, uri: Uri, newPathAndName: String,
                       ownerPackageName: String? = null, mediaType: Int? = null,
                       isDownload: Boolean? = null, mediaFile: File? = null,
-                      isManager: Boolean? = null,
+                      isManager: Boolean? = null, skipPlaylistName: Boolean = false,
                       volumesCache: List<StorageVolumeCompat>? = null,
                       persistedUriPermissionsCache: List<UriPermission>? = null): File {
         if (uri.authority?.equals(MediaStore.AUTHORITY) == false)
@@ -3015,9 +3019,12 @@ object MediaStoreCompat {
                                 MediaStore.Files.FileColumns._ID))))
             }
         }
+        val pattern = Regex("""\.(?:pending|trashed)-\d+-(.+)""")
+        val match = pattern.matchEntire(newFile.name)
+        val playlistName = if (match != null) match.groupValues[1] else newFile.nameWithoutExtension
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_PLAYLIST
-                        && mediaType != MEDIA_TYPE_SUBTITLE) || isManager!!
+            if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_SUBTITLE && mediaType
+                        != MEDIA_TYPE_PLAYLIST) || isManager!!
                 || isOwned(context, ownerPackageName!!)) {
                 if (forceMove) {
                     if (volume.requireCanonicalDirectory().resolve(folderName).isDirectory) {
@@ -3028,6 +3035,17 @@ object MediaStoreCompat {
                                         "$folderName unexpectedly requires MANAGE_EXTERNAL_STORAGE " +
                                         "permission. The default folders are: ${folders.values.flatten()}"
                             )
+                        }
+                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                            val playlistUri = ContentUris.withAppendedId(
+                                @Suppress("deprecation")
+                                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                                ContentUris.parseId(uri))
+                            if (context.contentResolver.update(playlistUri, ContentValues().apply {
+                                    put(@Suppress("deprecation")
+                                    MediaStore.Audio.Playlists.NAME, playlistName)
+                                }, null, null) != 1)
+                                throw IllegalStateException("update() for playlist failed")
                         }
                         return newFile
                     }
@@ -3083,10 +3101,45 @@ object MediaStoreCompat {
                             if (mimeType != null) {
                                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                             }
+                            if (guessMediaTypeFromUri(uri) == MEDIA_TYPE_PLAYLIST &&
+                                !skipPlaylistName) {
+                                put(@Suppress("deprecation")
+                                MediaStore.Audio.Playlists.NAME, playlistName)
+                            }
                         }, null, null) != 1)
                         throw IllegalStateException("update() failed")
+                    if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName &&
+                        guessMediaTypeFromUri(uri) != mediaType) {
+                        val playlistUri = ContentUris.withAppendedId(
+                            getBaseUriForMediaType(msv, mediaType),
+                            ContentUris.parseId(uri)
+                        )
+                        if (context.contentResolver.update(playlistUri, ContentValues().apply {
+                                put(@Suppress("deprecation")
+                                MediaStore.Audio.Playlists.NAME, playlistName)
+                            }, null, null) != 1)
+                            throw IllegalStateException("update() for playlist failed")
+                    }
                     return newFile
                 }
+            }
+            // Moving a playlist requires updating the NAME field with SQL update, which requires
+            // owning it on Android 11 only. But because this is such a specific version and file
+            // type combination, these files are often small, and we have a method to change owner
+            // using copying move, just silently do it. The alternative is bothering the developer
+            // that uses this method with doing it manually in this specific case only.
+            if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName) {
+                // However, we have to be careful because adoptFile calls markIsTrashedStatus
+                // which calls back here, and that call is something we'd like to permit. Thus
+                // make markIsTrashedStatus set skipPlaylistName=true to bypass this.
+                val newUri = adoptFile(context, uri, ownerPackageName, mediaType, isDownload,
+                    mediaFile, isManager, volumesCache, persistedUriPermissionsCache)
+                // Forcing ownerPackageName to context.packageName prevents infinite recursion,
+                // and is also correct after adoptFile() because that's the whole point.
+                return efficientMove(context, newUri, newPathAndName,
+                    context.packageName, null, null,
+                    null, isManager, false, volumesCache,
+                    persistedUriPermissionsCache)
             }
         } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
             // Q move doesn't allow Files and Playlist collections (but Downloads is allowed oddly
@@ -3096,10 +3149,12 @@ object MediaStoreCompat {
             val id = ContentUris.parseId(uri)
             // We can fake the media type of any kind of file, so if the target directory is one of
             // the allowed ones for any kind of media, then we can move the file there.
-            var fakeMediaType = folders.filter {
-                isMovableForQ(it.key)
-            }.entries.find { it.value.find { prefix ->
-                newRelativePath.startsWith("$prefix/", ignoreCase = true) ||
+            var fakeMediaType = if (isMovableForQ(mediaType!!) && folders[mediaType]!!.find {
+                        prefix -> newRelativePath.startsWith("$prefix/", ignoreCase = true)
+                        || newRelativePath.equals(prefix, ignoreCase = true) } != null)
+                mediaType
+            else folders.filter { isMovableForQ(it.key) }.entries.find { it.value.find {
+                    prefix -> newRelativePath.startsWith("$prefix/", ignoreCase = true) ||
                         newRelativePath.equals(prefix, ignoreCase = true) } != null }?.key
             var fakeIsDownload = newRelativePath.startsWith(
                 "${Environment.DIRECTORY_DOWNLOADS}/", ignoreCase = true) || newRelativePath
@@ -3138,8 +3193,17 @@ object MediaStoreCompat {
                     // don't risk the move maybe succeeding but this being undetectable due to
                     // downloads bug. Just fall back
                     fakeMediaType = null // don't consider faking media type in this case
-                    if (fakeIsDownload && !hasWriteExternalStorage(context)) {
-                        baseUri = if (isMovableForQ(mediaType!!))
+                    if (fakeIsDownload && hasWriteExternalStorage(context)) {
+                        // have storage permission, let's get the information needed to detect if
+                        // the move was a success through the storage permission instead of
+                        // MediaStore. it might work because MediaStore has a bug allowing moves to
+                        // work without having any kind of permission (but we only try if we can
+                        // detect the result to increase reliability and avoid being chaotic). see:
+                        // https://cs.android.com/android/_/android/platform/packages/providers/MediaProvider/+/3f12cfbd7f7d76e9908ebe9285f6d0c8bc1e7775
+                        mediaFileUsedToExist = mediaFile.exists()
+                        targetFileUsedToNotExist = !newFile.exists()
+                    } else {
+                        baseUri = if (isMovableForQ(mediaType))
                             getBaseUriForMediaType(volume.mediaStoreVolumeName, mediaType)
                         else null
                         if (baseUri != null) {
@@ -3151,17 +3215,8 @@ object MediaStoreCompat {
                                         or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                             )
                         }
-                    } else if (fakeIsDownload) {
-                        // have storage permission, let's get the information needed to detect if
-                        // the move was a success through the storage permission instead of
-                        // MediaStore. it might work because MediaStore has a bug allowing moves to
-                        // work without having any kind of permission (but we only try if we can
-                        // detect the result to increase reliability and avoid being chaotic). see:
-                        // https://cs.android.com/android/_/android/platform/packages/providers/MediaProvider/+/3f12cfbd7f7d76e9908ebe9285f6d0c8bc1e7775
-                        mediaFileUsedToExist = mediaFile.exists()
-                        targetFileUsedToNotExist = !newFile.exists()
                     }
-                } else if (fakeMediaType != mediaType!!) {
+                } else if (fakeMediaType != mediaType) {
                     val baseUriForFile = getBaseUriForMediaType(volume.mediaStoreVolumeName,
                         MEDIA_TYPE_NONE)
                     context.checkGrantSelfUriPermission(baseUriForFile,
@@ -3222,7 +3277,7 @@ object MediaStoreCompat {
                                 }, null, null) != 1)
                                 Log.e(TAG, "Failed to update file in MediaStore (1)")
                         }
-                        if (mediaType == MEDIA_TYPE_PLAYLIST) {
+                        if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName) {
                             context.checkGrantSelfUriPermission(@Suppress("deprecation")
                             MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -3236,8 +3291,7 @@ object MediaStoreCompat {
                                         put(@Suppress("deprecation")
                                         MediaStore.Audio.Playlists.IS_PENDING, 0)
                                         put(@Suppress("deprecation")
-                                        MediaStore.Audio.Playlists.NAME,
-                                            newPath.nameWithoutExtension)
+                                        MediaStore.Audio.Playlists.NAME, playlistName)
                                     }, null, null) != 1)
                                 throw IllegalStateException("Failed to update playlist in MediaStore")
                         } else {
@@ -3250,8 +3304,16 @@ object MediaStoreCompat {
                         return newFile
                     } else if (rows == 0 && fakeIsDownload && ((mediaFileUsedToExist &&
                                 !mediaFile.exists()) || (targetFileUsedToNotExist &&
-                                newFile.exists())) // we have storage permission but weren't
-                    ) return newFile // allowed to edit downloads table, and file was on SD card
+                                newFile.exists()))
+                    ) {
+                        // we have storage permission but weren't allowed to edit downloads table,
+                        // and file was on SD card
+                        try {
+                            scanFile(context, mediaFile.path)
+                        } catch (_: Exception) {}
+                        getMediaUriForFile(context, newFile.path)
+                        return newFile
+                    }
                 }
             }
         }
@@ -3267,7 +3329,7 @@ object MediaStoreCompat {
             }
             if (!mediaFile.renameTo(newFile))
                 throw IllegalStateException("Failed to renameTo($newFile) file")
-            if (mediaType == MEDIA_TYPE_PLAYLIST) {
+            if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName) {
                 context.checkGrantSelfUriPermission(@Suppress("deprecation")
                 MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -3279,7 +3341,7 @@ object MediaStoreCompat {
                             .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
                         ContentValues().apply {
                             put(@Suppress("deprecation") MediaStore.Audio.Playlists.NAME,
-                                newFile.nameWithoutExtension)
+                                playlistName)
                             put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
                                 newFile.absolutePath)
                         }, null, null) != 1)
@@ -3331,32 +3393,36 @@ object MediaStoreCompat {
                             moveResult, newPath.name)
                     } else moveResult
                     if (renameResult != null) {
-                        if (mediaType == MEDIA_TYPE_PLAYLIST &&
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                            context.checkGrantSelfUriPermission(@Suppress("deprecation")
-                            MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
-                                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                        or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                                        or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-                                        or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                            if (context.contentResolver.update(ContentUris.withAppendedId(
-                                    @Suppress("deprecation") MediaStore.Audio.Playlists
-                                        .EXTERNAL_CONTENT_URI, ContentUris.parseId(uri)),
-                                    ContentValues().apply {
-                                        if (!newFile.name.startsWith(".pending-")) {
-                                            put(@Suppress("deprecation")
-                                                MediaStore.Audio.Playlists.NAME,
-                                                newFile.nameWithoutExtension)
-                                        }
-                                        put(@Suppress("deprecation") MediaStore.Audio.Playlists.DATA,
-                                            newFile.absolutePath)
-                                    }, null, null) != 1)
-                                throw IllegalStateException("Failed to update playlist $uri in MediaStore")
-                        } else if (context.contentResolver.update(uri, ContentValues().apply {
+                        val rows = if (mediaType == MEDIA_TYPE_PLAYLIST && !skipPlaylistName) {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                                context.checkGrantSelfUriPermission(
+                                    @Suppress("deprecation")
+                                    MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                            or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                                            or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                                )
+                            }
+                            val playlistUri = ContentUris.withAppendedId(
+                                @Suppress("deprecation") MediaStore.Audio
+                                    .Playlists.EXTERNAL_CONTENT_URI,
+                                ContentUris.parseId(uri))
+                            context.contentResolver.update(playlistUri, ContentValues()
+                                .apply {
+                                    put(@Suppress("deprecation")
+                                        MediaStore.Audio.Playlists.NAME, playlistName)
+                                    put(@Suppress("deprecation")
+                                        MediaStore.Audio.Playlists.DATA, newFile.absolutePath)
+                                }, null, null)
+                        } else {
+                            context.contentResolver.update(uri, ContentValues().apply {
                                 put(MediaStore.MediaColumns.DATA, newFile.absolutePath)
-                            }, null, null) != 1) {
+                            }, null, null)
+                        }
+                        if (rows != 1) {
                             if (Build.VERSION.SDK_INT != Build.VERSION_CODES.R ||
-                                supportsWriteRequestForSidecar())
+                                    supportsWriteRequestForSidecar())
                                 throw IllegalStateException("Failed to update file $uri in MediaStore")
                             getMediaUriForFile(context, newFile.absolutePath)
                         }
@@ -3447,22 +3513,11 @@ object MediaStoreCompat {
         }
         val invalidPath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 !getOkFolders(mediaType!!).contains(rootFolder) && !forceMove
-        if (forceMove || invalidPath) {
+        if (invalidPath) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-            if (forceMove &&
-                !volume.requireCanonicalDirectory().resolve("Recordings").isDirectory) {
-                val safUri = getDocumentUriEx(
-                    context, uri, mediaFile,
-                    volume.mediaStoreVolumeName, ResolvePermissions.OnlyPersistedTree,
-                    true, volumesCache, persistedUriPermissionsCache
-                )
-                if (safUri !is String)
-                    return null
-                return RequestToken.Uri(safUri, false)
-            }
             // Same folder gets an exception, as well as Android/media/$packageName/
-            if (invalidPath && volume.requireCanonicalDirectory().resolve(newParent) !=
+            if (volume.requireCanonicalDirectory().resolve(newParent) !=
                 mediaFile.parentFile && !isAndroidMediaFolder(context, newParent)) {
                 if (!canBecomeManager(context))
                     throw IllegalArgumentException("folder $rootFolder not allowed, allowed folders " +
@@ -3472,10 +3527,17 @@ object MediaStoreCompat {
                 return RequestToken.Manager
             }
         }
-        val needBackportRules = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-                !getOkFolders(mediaType!!).contains(rootFolder)
-        val mask = if (needBackportRules)
-            PERMISSION_EFFICIENT_MOVE else PERMISSION_EFFICIENT_MOVE_Q_RULES
+        val qRulesOk = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
+                getOkFolders(mediaType!!).contains(rootFolder)
+        val mask = if (qRulesOk) PERMISSION_EFFICIENT_MOVE_Q_RULES else if (
+            folders.filter { isMovableForQ(it.key) }.entries.find { it.value.find {
+                    prefix -> newParent.startsWith("$prefix/", ignoreCase = true) ||
+                    newParent.equals(prefix, ignoreCase = true) } != null }
+                ?.let { isMovableForQ(it.key) } == true ||
+            newParent.startsWith("${Environment.DIRECTORY_DOWNLOADS}/",
+                ignoreCase = true) || newParent.equals(Environment.DIRECTORY_DOWNLOADS,
+                ignoreCase = true)
+        ) PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX else PERMISSION_EFFICIENT_MOVE
         val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             isAffectedByMoveGenericVolumeBug()) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
@@ -5135,8 +5197,8 @@ object MediaStoreCompat {
                         "${mediaFile.name}" else mediaFile.name.substring(".trashed-"
                             .length).substringAfter('-')).absolutePath
                 val file = efficientMove(context, uri, path, ownerPackageName,
-                    mediaType, isDownload, mediaFile, false, volumesCache,
-                    persistedUriPermissionsCache)
+                    mediaType, isDownload, mediaFile, false, skipPlaylistName = true,
+                    volumesCache, persistedUriPermissionsCache)
                 return getMediaUriForFile(context, file.path)
             }
         }
