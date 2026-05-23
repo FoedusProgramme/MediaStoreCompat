@@ -4636,7 +4636,6 @@ object MediaStoreCompat {
                     if (mimeType != null) {
                         // Playlists being moved will reset their MIME type to M3U, so you have to
                         // specify correct MIME type every time to avoid getting .m3u suffix added.
-                        // TODO: report AOSP bug for this nonsense
                         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                     }
                 }, null, null) != 1)
