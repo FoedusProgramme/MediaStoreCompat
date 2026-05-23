@@ -358,9 +358,10 @@ object MediaStoreCompat {
      */
     @SuppressLint("SdCardPath")
     fun getMediaUriForFile(context: Context, file: String): Uri {
-        val file = if (file.startsWith("/sdcard")) file.replaceFirst("/sdcard",
-            StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
-                    || it.isEmulated }.requireCanonicalDirectory().path) else file
+        val file = if (file.startsWith("/sdcard", ignoreCase = true)) StorageManagerCompat
+            .getStorageVolumes(context).first { it.isPrimary || it.isEmulated }
+            .requireCanonicalDirectory().path + file.substring("/sdcard".length)
+        else file
         val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             context.contentResolver.query(
                 FILES_EXTERNAL_CONTENT_URI,
@@ -620,11 +621,10 @@ object MediaStoreCompat {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && forWrite == null &&
             resolvePermissions == ResolvePermissions.OnlyPersisted) {
             if (mediaUri == null) {
-                val file = if (mediaFile!!.absolutePath.startsWith("/sdcard"))
-                    mediaFile.absolutePath.replaceFirst("/sdcard",
-                    StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
-                            || it.isEmulated }.requireCanonicalDirectory().path) else
-                                mediaFile.absolutePath
+                val file = if (mediaFile!!.absolutePath.startsWith("/sdcard", ignoreCase =
+                        true)) StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
+                        || it.isEmulated }.requireCanonicalDirectory().path + mediaFile.absolutePath
+                            .substring("/sdcard".length) else mediaFile.absolutePath
                 // If we have a grant for the media uri but don't usually have access to the file,
                 // this will fail. The caller has to supply the mediaUri in that case.
                 val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -1511,9 +1511,10 @@ object MediaStoreCompat {
     @SuppressLint("SdCardPath")
     @JvmStatic
     fun scanFile(context: Context, file: String): Uri? {
-        val file = if (file.startsWith("/sdcard")) file.replaceFirst("/sdcard",
-            StorageManagerCompat.getStorageVolumes(context).first { it.isPrimary
-                    || it.isEmulated }.requireCanonicalDirectory().path) else file
+        val file = if (file.startsWith("/sdcard", ignoreCase = true)) StorageManagerCompat
+            .getStorageVolumes(context).first { it.isPrimary || it.isEmulated }
+            .requireCanonicalDirectory().path + file.substring("/sdcard".length)
+        else file
         return try {
             scanFileOrThrow(context, file)
         } catch (e: Exception) {
