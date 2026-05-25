@@ -132,24 +132,40 @@ internal class DeleteRequestActivity : DeleteUiActivity() {
         }
     }
 
-    protected override fun doIt(): Boolean {
+    protected override fun doIt(): Exception? {
         val isManager = MediaStoreCompat.isManager(this)
         val volumes = StorageManagerCompat.getStorageVolumes(this)
         val persistedUriPermissions = contentResolver.persistedUriPermissions
-        uris.forEach {
-            if (isTrash && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                MediaStoreCompat.markIsTrashedStatus(
-                    this, it, doTrash, isManager = isManager,
-                    volumesCache = volumes, persistedUriPermissionsCache = persistedUriPermissions
-                )
-            } else {
-                MediaStoreCompat.delete(
-                    this, it, isManager = isManager, volumesCache = volumes,
-                    persistedUriPermissionsCache = persistedUriPermissions
-                )
+        val errors = uris.mapNotNull {
+            try {
+                if (isTrash && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    MediaStoreCompat.markIsTrashedStatus(
+                        this,
+                        it,
+                        doTrash,
+                        isManager = isManager,
+                        volumesCache = volumes,
+                        persistedUriPermissionsCache = persistedUriPermissions
+                    )
+                } else {
+                    MediaStoreCompat.delete(
+                        this, it, isManager = isManager, volumesCache = volumes,
+                        persistedUriPermissionsCache = persistedUriPermissions
+                    )
+                }
+                null
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to trash/delete $it", e)
+                e
             }
         }
-        return true
+        val first = errors.firstOrNull()
+        if (errors.size > 1) {
+            errors.subList(1, errors.size).forEach {
+                first!!.addSuppressed(it)
+            }
+        }
+        return first
     }
 
     override fun onDestroy() {

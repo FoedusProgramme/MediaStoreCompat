@@ -23,6 +23,7 @@ import android.app.Dialog;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
@@ -316,7 +317,7 @@ abstract class DeleteUiActivity extends Activity {
         }
     }
 
-    protected abstract boolean doIt();
+    protected abstract @Nullable Exception doIt();
 
     private void onPositiveAction(@Nullable DialogInterface dialog, int which) {
         // Disable the buttons
@@ -330,13 +331,13 @@ abstract class DeleteUiActivity extends Activity {
         mHandler.postDelayed(mShowProgressDialogRunnable, BEFORE_SHOW_PROGRESS_TIME_MS);
 
         positiveActionTask = new AsyncTask<Void, Void, Void>() {
-            boolean ok = false;
+            Exception error = null;
 
             @Override
             protected Void doInBackground(Void... params) {
                 Log.d(TAG, "User allowed grant for " + uris);
                 try {
-                    ok = doIt();
+                    error = doIt();
                 } catch (Exception e) {
                     Log.w(TAG, "failed to do action", e);
                 }
@@ -346,7 +347,13 @@ abstract class DeleteUiActivity extends Activity {
 
             @Override
             protected void onPostExecute(Void result) {
-                setResult(ok ? Activity.RESULT_OK : Activity.RESULT_CANCELED);
+                if (error == null) {
+                    setResult(Activity.RESULT_OK);
+                } else {
+                    setResult(Activity.RESULT_FIRST_USER, new Intent()
+                            .putExtra("ErrorMsg", error.getMessage())
+                            .putExtra("StackTrace", Log.getThrowableString(error)));
+                }
                 mHandler.removeCallbacks(mShowProgressDialogRunnable);
 
                 if (!progressDialog.isShowing()) {

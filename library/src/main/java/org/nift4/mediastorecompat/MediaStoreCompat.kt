@@ -5166,6 +5166,13 @@ object MediaStoreCompat {
      * cases, it either already skips the query or the query is required to fix an actual issue that
      * would cause [MediaStore.createTrashRequest] to fail, and hence this method has optimal speed.
      *
+     * If, for any reason, one or more items fail to be trashed:
+     * - If the error happened in the system dialog from Android 11 and later,
+     *   [android.app.Activity.RESULT_OK] is returned and an error is logged
+     * - If the error happened in library code, [android.app.Activity.RESULT_FIRST_USER] is returned
+     *   and the error is both logged and available in the returned [Intent] as [String] extras
+     *   `"ErrorMsg"` (for one-line message) and `"StackTrace"` (for full error logs).
+     *
      * Note: folders can be trashed, but all files inside the folder have to be trashed separately.
      * TODO: really? or is trashing folders only since S since trashFile API is S+?
      *  and if that _is_ true then the method should do it recursively by itself?
@@ -6010,6 +6017,13 @@ object MediaStoreCompat {
      *
      * You can send a maximum of 2000 uris in each request. Attempting to send more than 2000 uris
      * will result in a [IllegalArgumentException].
+     *
+     * If, for any reason, one or more items fail to delete:
+     * - If the error happened in the system dialog from Android 11 and later,
+     *   [android.app.Activity.RESULT_OK] is returned and an error is logged
+     * - If the error happened in library code, [android.app.Activity.RESULT_FIRST_USER] is returned
+     *   and the error is both logged and available in the returned [Intent] as [String] extras
+     *   `"ErrorMsg"` (for one-line message) and `"StackTrace"` (for full error logs).
      */
     @JvmStatic
     fun createDeleteRequest(context: Context, uris: Collection<Uri>): PendingIntent {
