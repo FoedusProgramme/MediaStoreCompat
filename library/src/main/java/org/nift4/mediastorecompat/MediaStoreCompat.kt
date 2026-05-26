@@ -132,7 +132,7 @@ import kotlin.text.substringAfterLast
  * Basically, this library is a convenient replacement for the MediaStore and File API in their
  * Android 11 states, but it works on Android 5 or later. While this library uses SAF to fulfill
  * this goal in some cases, any kind of SAF-focused API would be out-of-scope, and this library
- * explicitly does NOT use SAF on Android 11 and later in any case. You can always combine this
+ * explicitly does NOT use SAF on Android 12 and later in any case. You can always combine this
  * library with your own abstractions if so desired. A useful method for an app that relies on SAF a
  * lot is [getDocumentUri]/[getDocumentUriEx] which allows you to process [Uri]s obtained from
  * external sources, such as an [Intent], using SAF.
