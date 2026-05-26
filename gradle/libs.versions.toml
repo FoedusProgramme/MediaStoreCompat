@@ -1,22 +1,33 @@
 [versions]
+# Gradle plugins
 agp = "9.2.1"
-coreKtx = "1.17.0"
 publish = "0.36.0"
-kotlin = "2.3.20"
+kotlin = "2.3.21"
+
+# Runtime dependencies
+#noinspection GradleDependency we need minSdk 21
+core = "1.17.0"
+
+# Testing
+#noinspection GradleDependency we need minSdk 21
 test = "1.7.0"
-uiautomator = "2.4.0-beta02"
+#noinspection GradleDependency we need minSdk 21
 orchestrator = "1.6.1"
+#noinspection GradleDependency we need minSdk 21
+uiautomator = "2.4.0-alpha05"
+#noinspection GradleDependency we need minSdk 21
+uiautomator-shell = "1.0.0-alpha03"
 truth = "1.4.5"
-testparameterinjector = "1.21"
+testparameterinjector = "1.20"
 mockk = "1.14.9"
 
 [libraries]
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core" }
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "test" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "test" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "test" }
 androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
-androidx-test-uiautomator-shell = { group = "androidx.test.uiautomator", name = "uiautomator-shell", version.ref = "uiautomator" }
+androidx-test-uiautomator-shell = { group = "androidx.test.uiautomator", name = "uiautomator-shell", version.ref = "uiautomator-shell" }
 androidx-test-orchestrator = { group = "androidx.test", name = "orchestrator", version.ref = "orchestrator" }
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 truth = { group = "com.google.truth", name = "truth", version.ref = "truth" }

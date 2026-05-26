@@ -72,7 +72,7 @@ mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
 
-    coordinates("io.github.nift4.mediastorecompat", "mediastorecompat", "1.0.0-alpha29")
+    coordinates("io.github.nift4.mediastorecompat", "mediastorecompat", "1.0.0-alpha30")
 
     pom {
         name.set("MediaStoreCompat")
@@ -96,6 +96,11 @@ mavenPublishing {
                 id.set("android")
                 name.set("Portions (C) 2007 The Android Open Source Project")
                 url.set("https://source.android.com/")
+            }
+            developer {
+                id.set("kotlin")
+                name.set("Portions (C) 2010 JetBrains s.r.o. and Kotlin Programming Language contributors")
+                url.set("https://kotlinlang.org/")
             }
         }
         scm {

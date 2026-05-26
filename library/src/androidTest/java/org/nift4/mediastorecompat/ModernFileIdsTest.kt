@@ -24,7 +24,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.shell.Shell
 import androidx.test.shell.ShellServer
 import com.google.common.truth.Truth.assertThat
-import com.google.common.truth.TruthJUnit.assume
 import com.google.testing.junit.testparameterinjector.TestParameter
 import com.google.testing.junit.testparameterinjector.TestParameterInjector
 import org.junit.After
@@ -106,6 +105,9 @@ class ModernFileIdsTest(
         } else if (type != "audio" && type != "video") {
             grantStoragePermission()
         }
+        assertThat(mediaUri).isEqualTo(MediaStoreCompat.getMediaUriForFile(context,
+            "${getDir()}/HELLO.$ext"))
+        assertThat(mediaUri).isEqualTo(scanFile(context, "${getDir()}/HELLO.$ext"))
         context.contentResolver.query(mediaUri, arrayOf(MediaStore.MediaColumns.DATA),
             null, null, null).use {
             assertThat(it).isNotNull()

@@ -98,6 +98,9 @@ class LegacyFileIdsTest(
             assertThat(it.getString(0)).isEqualTo(getDir()
                 .resolve("hello.$ext").absolutePath)
         }
+        assertThat(mediaUri).isEqualTo(MediaStoreCompat.getMediaUriForFile(context,
+            "${getDir()}/HELLO.$ext"))
+        assertThat(mediaUri).isEqualTo(scanFile(context, "${getDir()}/HELLO.$ext"))
         executeShellCommand("rm ${getDir()}/hello.$ext")
         if (ext != "pls" && ext != "m3u" && ext != "wpl") {
             // also, test it disappears after being deleted and then scanned

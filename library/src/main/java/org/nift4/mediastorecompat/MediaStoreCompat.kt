@@ -461,8 +461,7 @@ object MediaStoreCompat {
             }
             false
         }
-        val fileRelativeIn = File(file).relativeTo(volume
-            .requireCanonicalDirectory())
+        val fileRelativeIn = File(file).relativeTo(volume)
         val mediaType = if (!isHidden) getMediaTypeForMime(
             guessMimeTypeFromFileName(file)) else MEDIA_TYPE_NONE
         val (fileRelative, mimeType) = computeFileAndMime(fileRelativeIn, null)
@@ -729,7 +728,7 @@ object MediaStoreCompat {
                 ?: throw IllegalArgumentException("Can't find volume for $mediaFile ($vol)")
         else StorageManagerCompat.getVolumeForPath(volumes, mediaFile!!)
         val documentId = StorageManagerCompat.buildExternalStorageDocumentId(
-            volume, mediaFile!!.relativeTo(volume.requireCanonicalDirectory()))
+            volume, mediaFile!!.relativeTo(volume))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && forWrite == null
             && mediaUri != null && resolvePermissions == ResolvePermissions.OnlyPersisted)
             return documentId
@@ -1213,6 +1212,28 @@ object MediaStoreCompat {
         }
     }
 
+    private fun getNormallyCasedFolder(folderName: String): String {
+        return when (folderName.lowercase()) {
+            Environment.DIRECTORY_MUSIC.lowercase() -> Environment.DIRECTORY_MUSIC
+            Environment.DIRECTORY_DOCUMENTS.lowercase() -> Environment.DIRECTORY_DOCUMENTS
+            Environment.DIRECTORY_DOWNLOADS.lowercase() -> Environment.DIRECTORY_DOWNLOADS
+            Environment.DIRECTORY_MOVIES.lowercase() -> Environment.DIRECTORY_MOVIES
+            Environment.DIRECTORY_DCIM.lowercase() -> Environment.DIRECTORY_DCIM
+            Environment.DIRECTORY_ALARMS.lowercase() -> Environment.DIRECTORY_ALARMS
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Environment.DIRECTORY_AUDIOBOOKS
+            else "Audiobooks").lowercase() -> (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                Environment.DIRECTORY_AUDIOBOOKS else "Audiobooks")
+            Environment.DIRECTORY_NOTIFICATIONS.lowercase() -> Environment.DIRECTORY_NOTIFICATIONS
+            Environment.DIRECTORY_PICTURES.lowercase() -> Environment.DIRECTORY_PICTURES
+            Environment.DIRECTORY_PODCASTS.lowercase() -> Environment.DIRECTORY_PODCASTS
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Environment.DIRECTORY_RECORDINGS
+            else "Recordings").lowercase() -> (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                Environment.DIRECTORY_RECORDINGS else "Recordings")
+            Environment.DIRECTORY_RINGTONES.lowercase() -> Environment.DIRECTORY_RINGTONES
+            else -> folderName
+        }
+    }
+
     /**
      * Checks whether a file can be created at this location. If the return value is null, [create]
      * can be called immediately, otherwise a [RequestToken] generated has to be passed to
@@ -1267,14 +1288,11 @@ object MediaStoreCompat {
         var volumeCompat = volumeCompat
         if (fileIn.isAbsolute) {
             if (volumeCompat != null) {
-                fileIn = fileIn.relativeTo(volumeCompat.requireCanonicalDirectory())
-                if (fileIn.path.startsWith("../")) {
-                    throw IllegalArgumentException("$fileIn not inside $volumeCompat")
-                }
+                fileIn = fileIn.relativeTo(volumeCompat)
             } else {
                 volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 volumeCompat = StorageManagerCompat.getVolumeForPath(volumesCache, fileIn)
-                fileIn = fileIn.relativeTo(volumeCompat.requireCanonicalDirectory())
+                fileIn = fileIn.relativeTo(volumeCompat)
             }
         } else if (volumeCompat == null) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
@@ -1282,7 +1300,10 @@ object MediaStoreCompat {
                 ?: throw IllegalStateException("Internal storage appears to be unavailable at this moment")
         }
         var (file, mimeTypeReal) = computeFileAndMime(fileIn, mimeType)
-        val folderName = file.path.split('/', limit = 2)[0]
+        val folderName = getNormallyCasedFolder(file.path.split('/', limit = 2)[0])
+        if (folderName == "..") {
+            throw IllegalArgumentException("$fileIn should be inside the volume")
+        }
         @SuppressLint("NewApi") // folders array is fine to use in this isolated case
         // audio/3gpp <-> video/3gpp is the only case where one file extension (.3gpp) can map to
         // multiple media types, special case it for simplicity.
@@ -1316,8 +1337,7 @@ object MediaStoreCompat {
         val relativePath = file.parent ?: ""
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (mimeTypeReal == DocumentsContract.Document.MIME_TYPE_DIR) {
-                val firstFolderFromRoot = if (relativePath == "") file.name else relativePath
-                if (folders.values.find { it.contains(firstFolderFromRoot) } == null) {
+                if (folders.values.find { it.contains(folderName) } == null) {
                     if (!canBecomeManager(context))
                         throw IllegalArgumentException("Creating a non-default top level folder " +
                                 "requires MANAGE_EXTERNAL_STORAGE: $fileNameAndPath. The default " +
@@ -1415,6 +1435,7 @@ object MediaStoreCompat {
     private fun scanFileInternal(context: Context, file: String): Uri? {
         val result = AtomicReference<Uri>(null)
         val latch = CountDownLatch(1)
+        // This API handles the case-insensitive FS just fine on every Android version
         MediaScannerConnection.scanFile(
             context, arrayOf(file),
             null
@@ -1654,11 +1675,11 @@ object MediaStoreCompat {
                         // manually because in projection it's allowed (will get NULLed for
                         // privacy if we can't see the actual owner, but it's ok, we just want
                         // to filter out files we ourselves own).
-                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "LOWER(" +
-                                "${MediaStore.MediaColumns.DATA}) NOT REGEXP '/\\.pending-[^/]+$'")
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                                "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'")
                     } else {
-                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "LOWER(" +
-                                "${MediaStore.MediaColumns.DATA}) NOT REGEXP '/\\.pending-[^/]+$'" +
+                        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+                                "${MediaStore.MediaColumns.DATA} NOT REGEXP '/\\.pending-[^/]+$'" +
                                 " AND (${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} != ?" +
                                 " OR ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} IS NULL)")
                         putStringArray(
@@ -2716,7 +2737,7 @@ object MediaStoreCompat {
     }
 
     private fun isAndroidMediaFolder(context: Context, folder: String): Boolean {
-        if (!folder.startsWith("Android/media/"))
+        if (!folder.startsWith("Android/media/", ignoreCase = true))
             return false
         val packageName = folder.substring("Android/media/".length).trimEnd { it == '/' }
         if (packageName == context.packageName) // TODO should this do shared uid? check system
@@ -2913,12 +2934,14 @@ object MediaStoreCompat {
         if (newPathAndNameFile.isAbsolute) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             volume = StorageManagerCompat.getVolumeForPath(volumesCache, newPathAndNameFile)
-            newRelativePath = newPathAndNameFile
-                .toRelativeString(volume.requireCanonicalDirectory())
+            newRelativePath = newPathAndNameFile.toRelativeString(volume)
         } else {
             newRelativePath = newPathAndName
         }
-        val folderName = newRelativePath.split('/', limit = 2)[0]
+        val folderName = getNormallyCasedFolder(newRelativePath.split('/', limit = 2)[0])
+        if (folderName == "..") {
+            throw IllegalArgumentException("$newPathAndName should be inside the volume")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!supportsWriteRequestForSidecar()) {
                 isManager = isManager ?: isManager(context)
@@ -2943,9 +2966,8 @@ object MediaStoreCompat {
             isDownload = isDownloadH
             mediaFile = mediaFileH
         }
-        if (volume != null && mediaFile!!.toRelativeString(volume
-                .requireCanonicalDirectory()).startsWith("../")) {
-            throw IllegalArgumentException("$newPathAndName is not inside current $volume ($mediaFile)")
+        if (volume != null) {
+            mediaFile!!.assertVolumeIs(volume)
         }
         volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
@@ -3051,16 +3073,16 @@ object MediaStoreCompat {
             var shouldBePendingR = false
             var shouldBeTrashed = false
             if (match != null) {
-                shouldBePendingR = match.groupValues[1] == "pending"
-                shouldBeTrashed = match.groupValues[1] == "trashed"
+                shouldBePendingR = match.groupValues[1].equals("pending", ignoreCase = true)
+                shouldBeTrashed = match.groupValues[1].equals("trashed", ignoreCase = true)
                 displayName = match.groupValues[2]
             }
             val match2 = pattern.matchEntire(mediaFile.name)
             var isPendingR = false
             var isTrashed = false
             if (match2 != null) {
-                isPendingR = match2.groupValues[1] == "pending"
-                isTrashed = match2.groupValues[1] == "trashed"
+                isPendingR = match2.groupValues[1].equals("pending", ignoreCase = true)
+                isTrashed = match2.groupValues[1].equals("trashed", ignoreCase = true)
             }
             if (supportsWriteRequestForSidecar() || (mediaType != MEDIA_TYPE_SUBTITLE && mediaType
                         != MEDIA_TYPE_PLAYLIST) || isManager!!
@@ -3219,16 +3241,11 @@ object MediaStoreCompat {
             val id = ContentUris.parseId(uri)
             // We can fake the media type of any kind of file, so if the target directory is one of
             // the allowed ones for any kind of media, then we can move the file there.
-            var fakeMediaType = if (isMovableForQ(mediaType!!) && folders[mediaType]!!.find {
-                        prefix -> newRelativePath.startsWith("$prefix/", ignoreCase = true)
-                        || newRelativePath.equals(prefix, ignoreCase = true) } != null)
+            var fakeMediaType = if (isMovableForQ(mediaType!!) && folders[mediaType]!!.contains(folderName))
                 mediaType
-            else folders.filter { isMovableForQ(it.key) }.entries.find { it.value.find {
-                    prefix -> newRelativePath.startsWith("$prefix/", ignoreCase = true) ||
-                        newRelativePath.equals(prefix, ignoreCase = true) } != null }?.key
-            var fakeIsDownload = newRelativePath.startsWith(
-                "${Environment.DIRECTORY_DOWNLOADS}/", ignoreCase = true) || newRelativePath
-                    .equals(Environment.DIRECTORY_DOWNLOADS, ignoreCase = true)
+            else folders.filter { isMovableForQ(it.key) }.entries.find {
+                it.value.contains(folderName) }?.key
+            var fakeIsDownload = folderName == Environment.DIRECTORY_DOWNLOADS
             if (fakeIsDownload && !isDownload!!) {
                 context.checkGrantSelfUriPermission(ContentUris.removeId(uri),
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -3273,10 +3290,8 @@ object MediaStoreCompat {
                         mediaFileUsedToExist = mediaFile.exists()
                         targetFileUsedToNotExist = !newFile.exists()
                     } else {
-                        baseUri = if (isMovableForQ(mediaType) && folders[mediaType]!!.find {
-                            prefix -> newRelativePath.startsWith("$prefix/",
-                                ignoreCase = true) || newRelativePath.equals(prefix,
-                                ignoreCase = true) } != null)
+                        baseUri = if (isMovableForQ(mediaType) &&
+                            folders[mediaType]!!.contains(folderName))
                             getBaseUriForMediaType(volume.mediaStoreVolumeName, mediaType)
                         else null
                         if (baseUri != null) {
@@ -3454,14 +3469,14 @@ object MediaStoreCompat {
                 )
                 mkdirsSaf(context.contentResolver, safTargetUri,
                     newPath.parent ?: "")
-                val moveResult = if (oldPath.parent != newPath.parent) {
+                val moveResult = if (!oldPath.parent.equals(newPath.parent, ignoreCase = true)) {
                     DocumentsContract.moveDocument(
                         context.contentResolver, safUri,
                         oldParent, safTargetUri
                     )
                 } else safUri
                 if (moveResult != null) {
-                    val renameResult = if (oldPath.name != newPath.name) {
+                    val renameResult = if (!oldPath.name.equals(newPath.name, ignoreCase = true)) {
                         DocumentsContract.renameDocument(context.contentResolver,
                             moveResult, newPath.name)
                     } else moveResult
@@ -3572,13 +3587,12 @@ object MediaStoreCompat {
         if (newPathWithoutNameFile.isAbsolute) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             volume = StorageManagerCompat.getVolumeForPath(volumesCache, newPathWithoutNameFile)
-            newParent = newPathWithoutNameFile.toRelativeString(
-                volume.requireCanonicalDirectory())
+            newParent = newPathWithoutNameFile.toRelativeString(volume)
         } else {
             newParent = newPathWithoutName
         }
         val newRelative = File(newParent)
-        val rootFolder = newRelative.path.split('/', limit = 2)[0]
+        val rootFolder = getNormallyCasedFolder(newRelative.path.split('/', limit = 2)[0])
         val forceMove = Build.VERSION.SDK_INT == Build.VERSION_CODES.R &&
                 rootFolder == "Recordings" && folders.values.find { it.contains(rootFolder) } ==
                 null && !(isManager ?: isManager(context))
@@ -3597,9 +3611,8 @@ object MediaStoreCompat {
                 PERMISSION_UPDATE_SQL, ownerPackageName, mediaType, isDownload,
                 mediaFile, volumesCache, null)
         }
-        if (volume != null && mediaFile!!.toRelativeString(volume
-                .requireCanonicalDirectory()).startsWith("../")) {
-            throw IllegalArgumentException("$newPathWithoutName is not inside current $volume ($mediaFile)")
+        if (volume != null) {
+            mediaFile!!.assertVolumeIs(volume)
         }
         val invalidPath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
                 !getOkFolders(mediaType!!).contains(rootFolder) && !forceMove
@@ -3607,8 +3620,8 @@ object MediaStoreCompat {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
             val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
             // Same folder gets an exception, as well as Android/media/$packageName/
-            if (volume.requireCanonicalDirectory().resolve(newParent) !=
-                mediaFile.parentFile && !isAndroidMediaFolder(context, newParent)) {
+            if (!volume.requireCanonicalDirectory().resolve(newParent).path.equals(
+                    mediaFile.parent, ignoreCase = true) && !isAndroidMediaFolder(context, newParent)) {
                 if (!canBecomeManager(context))
                     throw IllegalArgumentException("folder $rootFolder not allowed, allowed folders " +
                             "are ${getOkFolders(mediaType)} (can't request MANAGE_EXTERNAL_STORAGE)")
@@ -3620,13 +3633,10 @@ object MediaStoreCompat {
         val qRulesOk = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
                 folders[mediaType!!]?.contains(rootFolder) == true
         val mask = if (qRulesOk) PERMISSION_EFFICIENT_MOVE_Q_RULES else if (
-            folders.filter { isMovableForQ(it.key) }.entries.find { it.value.find {
-                    prefix -> newParent.startsWith("$prefix/", ignoreCase = true) ||
-                    newParent.equals(prefix, ignoreCase = true) } != null }
+            folders.filter { isMovableForQ(it.key) }.entries.find {
+                it.value.contains(rootFolder) }
                 ?.let { isMovableForQ(it.key) } == true ||
-            newParent.startsWith("${Environment.DIRECTORY_DOWNLOADS}/",
-                ignoreCase = true) || newParent.equals(Environment.DIRECTORY_DOWNLOADS,
-                ignoreCase = true)
+            newParent == Environment.DIRECTORY_DOWNLOADS
         ) PERMISSION_EFFICIENT_MOVE_Q_RULES_FLEX else PERMISSION_EFFICIENT_MOVE
         val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             isAffectedByMoveGenericVolumeBug()) {
@@ -3984,14 +3994,11 @@ object MediaStoreCompat {
         var volume = volume
         if (fileIn.isAbsolute) {
             if (volume != null) {
-                fileIn = fileIn.relativeTo(volume.requireCanonicalDirectory())
-                if (fileIn.path.startsWith("../")) {
-                    throw IllegalArgumentException("$fileIn not inside $volume")
-                }
+                fileIn = fileIn.relativeTo(volume)
             } else {
                 volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 volume = StorageManagerCompat.getVolumeForPath(volumesCache, fileIn)
-                fileIn = fileIn.relativeTo(volume.requireCanonicalDirectory())
+                fileIn = fileIn.relativeTo(volume)
             }
         } else if (volume == null) {
             volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
@@ -3999,7 +4006,7 @@ object MediaStoreCompat {
                 ?: throw IllegalStateException("Internal storage appears to be unavailable at this moment")
         }
         var (fileRelative, mimeTypeReal) = computeFileAndMime(fileIn, mimeType)
-        val folderName = fileRelative.path.split('/', limit = 2)[0]
+        val folderName = getNormallyCasedFolder(fileRelative.path.split('/', limit = 2)[0])
         @SuppressLint("NewApi") // folders array is fine to use in this isolated case
         // audio/3gpp <-> video/3gpp is the only case where one file extension (.3gpp) can map to
         // multiple media types, special case it for simplicity.
@@ -4125,9 +4132,8 @@ object MediaStoreCompat {
                     folderName == Environment.DIRECTORY_DOWNLOADS)
             }
             val needNoneWorkaround = !canInsertIntoNoneWithRealMime(mediaType) &&
-                    !(isManager ?: isManager(context)) && (folderName.equals(
-                Environment.DIRECTORY_DOWNLOADS, ignoreCase = true) || folderName
-                    .equals(Environment.DIRECTORY_DOCUMENTS, ignoreCase = true))
+                    !(isManager ?: isManager(context)) && (folderName == Environment
+                        .DIRECTORY_DOWNLOADS || folderName == Environment.DIRECTORY_DOCUMENTS)
             // forceMove uses a bug in FUSE implementation to create file in non-default top level
             val forceMove = folders.values.find { it.contains(folderName) } == null &&
                     Build.VERSION.SDK_INT == Build.VERSION_CODES.R && folderName == "Recordings" &&
@@ -4145,8 +4151,9 @@ object MediaStoreCompat {
                 folderName != Environment.DIRECTORY_DOWNLOADS &&
                 canInsertIntoNoneWithRealMime(mediaType) || mediaType == MEDIA_TYPE_PLAYLIST)
                 MEDIA_TYPE_NONE else mediaType
-            val insPath = if (forceMove) File("Downloads/${System.currentTimeMillis()}" +
-                    "_${fileRelative.name}") else if (needNoneWorkaround) File("Movies/"
+            val insPath = if (forceMove) File("${Environment.DIRECTORY_DOWNLOADS}/" +
+                    "${System.currentTimeMillis()}_${fileRelative.name}") else if
+                            (needNoneWorkaround) File("${Environment.DIRECTORY_MOVIES}/"
                     + "${System.currentTimeMillis()}_${fileRelative.name}") else fileRelative
             // Creates all parent folders for us if needed. Nice and simple as usual :)
             // (It will throw if the folder is invalid)
@@ -4600,7 +4607,7 @@ object MediaStoreCompat {
                                 it.getColumnIndexOrThrow(
                                     DocumentsContract.Document.COLUMN_MIME_TYPE
                                 )
-                            )
+                            ).lowercase()
                             if (mime != DocumentsContract.Document.MIME_TYPE_DIR) {
                                 // Our tree is not a directory? Seriously?
                                 // (this can only happen if it used to be but someone deleted it and
@@ -4634,13 +4641,14 @@ object MediaStoreCompat {
                         val documentIdColumn = it.getColumnIndexOrThrow(
                             DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                         do {
-                            if (it.getString(documentIdColumn) != targetId)
+                            if (!it.getString(documentIdColumn).equals(targetId,
+                                    ignoreCase = true))
                                 continue
                             val mime = it.getString(
                                 it.getColumnIndexOrThrow(
                                     DocumentsContract.Document.COLUMN_MIME_TYPE
                                 )
-                            )
+                            ).lowercase()
                             if (mime != DocumentsContract.Document.MIME_TYPE_DIR) {
                                 // This is important if this is the topmost folder we are asked to
                                 // create, as then the caller may believe it actually exists after we
@@ -4671,7 +4679,7 @@ object MediaStoreCompat {
         // Now we have something which does exist, the folder "first". We have to create every
         // subfolder one by one.
         val pathToCreate = File(folderPathFromVolume).relativeTo(treePath)
-            .relativeTo(first).invariantSeparatorsPath
+            .relativeTo(first).path
         // It turns out the folder that exists is the folder we are tasked to create
         if (pathToCreate.isEmpty())
             return
@@ -5294,7 +5302,7 @@ object MediaStoreCompat {
             if (!isOwned(context, ownerPackageName!!) && (mediaType == MEDIA_TYPE_PLAYLIST ||
                         mediaType == MEDIA_TYPE_SUBTITLE)) {
                 val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-                if (isTrashed == mediaFile!!.name.startsWith(".trashed-"))
+                if (isTrashed == mediaFile!!.name.startsWith(".trashed-", ignoreCase = true))
                     return uri
                 val path = mediaFile.resolveSibling(if (isTrashed) ".trashed-" +
                         "${System.currentTimeMillis() / 1000L + 30 * 24 * 60 * 60}-" +
@@ -6096,7 +6104,7 @@ object MediaStoreCompat {
             persistedUriPermissions.find { prefix ->
                 prefix.isReadPermission && (forWrite == false || prefix.isWritePermission) &&
                         DocumentsContract.getTreeDocumentId(prefix.uri).let {
-                            documentId.startsWith(it)
+                            documentId.startsWith(it, ignoreCase = true)
                         } && context.checkGrantSelfUriPermission(prefix.uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or if (forWrite != false)
@@ -6104,7 +6112,7 @@ object MediaStoreCompat {
             }?.uri ?: (if (forWrite == null) persistedUriPermissions.find { prefix ->
                 prefix.isReadPermission && !prefix.isWritePermission &&
                         DocumentsContract.getTreeDocumentId(prefix.uri).let {
-                            documentId.startsWith(it)
+                            documentId.startsWith(it, ignoreCase = true)
                         } && context.checkGrantSelfUriPermission(prefix.uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
@@ -6118,7 +6126,7 @@ object MediaStoreCompat {
             prefix.isReadPermission && (forWrite == false || prefix.isWritePermission) &&
                     DocumentsContractCompat.isTreeUri(prefix.uri) &&
                     DocumentsContract.getTreeDocumentId(prefix.uri).let {
-                        documentId.startsWith(it)
+                        documentId.startsWith(it, ignoreCase = true)
                     } && context.checkGrantSelfUriPermission(prefix.uri,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION or
                                 Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or if (forWrite != false)
@@ -6128,7 +6136,8 @@ object MediaStoreCompat {
             persistedUriPermissions.find { prefix ->
                 prefix.isReadPermission && (forWrite == false || prefix.isWritePermission) &&
                         !DocumentsContractCompat.isTreeUri(prefix.uri) &&
-                        documentId == DocumentsContract.getDocumentId(prefix.uri)
+                        documentId.equals(DocumentsContract.getDocumentId(
+                            prefix.uri), ignoreCase = true)
                         && context.checkGrantSelfUriPermission(prefix.uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or if (forWrite != false)
                         Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
@@ -6137,14 +6146,15 @@ object MediaStoreCompat {
             treeWritable ?: (if (forWrite == null) persistedUriPermissions.find { prefix ->
                 prefix.isReadPermission && !prefix.isWritePermission &&
                         DocumentsContract.getTreeDocumentId(prefix.uri).let {
-                            documentId.startsWith(it)
+                            documentId.startsWith(it, ignoreCase = true)
                         } && context.checkGrantSelfUriPermission(prefix.uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
             }?.uri ?: (persistedUriPermissions.find { prefix ->
                 prefix.isReadPermission && !prefix.isWritePermission &&
                         !DocumentsContractCompat.isTreeUri(prefix.uri) &&
-                        documentId == DocumentsContract.getDocumentId(prefix.uri)
+                        documentId.equals(DocumentsContract.getDocumentId(
+                            prefix.uri), ignoreCase = true)
                         && context.checkGrantSelfUriPermission(prefix.uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }?.uri?.let { return it }) else null) ?: return null, documentId
