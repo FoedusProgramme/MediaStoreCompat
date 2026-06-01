@@ -3680,6 +3680,7 @@ object MediaStoreCompat {
         var mediaType = mediaType
         var mediaFile = mediaFile
         var ownerPackageName = ownerPackageName
+        var isDownload = isDownload
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // This does support empty folders if you have their ID. But you can't get this ID
             // without manager permission, so it's a bit pointless.
@@ -3706,7 +3707,6 @@ object MediaStoreCompat {
                 return
             }
         }
-        var isDownload = isDownload
         queryMissing(context, uri, ownerPackageName, mediaType, null,
             mediaFile, needsOwner = true, needsFile = true,
             needsType = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q,
@@ -3720,6 +3720,14 @@ object MediaStoreCompat {
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && volume.isPrimary) {
+            context.checkGrantSelfUriPermission(
+                getBaseUriForMediaType(null,
+                    guessMediaTypeFromUri(uri) ?: MEDIA_TYPE_NONE),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
             try {
                 // ContentResolver.delete() is required for (abstract) playlists to delete properly
                 if (context.contentResolver.delete(uri, null, null) != 1)
@@ -3737,7 +3745,8 @@ object MediaStoreCompat {
         // https://github.com/d4rken-org/sdmaid/issues/312#issuecomment-191460988
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && mediaFile.delete()) {
             context.checkGrantSelfUriPermission(
-                ContentUris.removeId(uri),
+                getBaseUriForMediaType(null,
+                    guessMediaTypeFromUri(uri) ?: MEDIA_TYPE_NONE),
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                         Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                         Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
@@ -3779,6 +3788,7 @@ object MediaStoreCompat {
                 }
             }
             var fileUri: Uri? = null
+            var fileUriGranted = false
             if (mediaType == MEDIA_TYPE_PLAYLIST && exists
                 && !isDeletionAllowedUsingSqlHook(mediaFile.path)) {
                 try {
@@ -3793,7 +3803,7 @@ object MediaStoreCompat {
                 val baseUriForFile = getBaseUriForMediaType(
                     if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q)
                         volume.mediaStoreVolumeName else null, MEDIA_TYPE_NONE)
-                context.checkGrantSelfUriPermission(
+                fileUriGranted = context.checkGrantSelfUriPermission(
                     baseUriForFile,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -3832,7 +3842,7 @@ object MediaStoreCompat {
                     val baseUriForFile = getBaseUriForMediaType(
                         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q)
                             volume.mediaStoreVolumeName else null, MEDIA_TYPE_NONE)
-                    context.checkGrantSelfUriPermission(
+                    fileUriGranted = context.checkGrantSelfUriPermission(
                         baseUriForFile,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION or
                                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -3860,13 +3870,16 @@ object MediaStoreCompat {
                 }
                 // always run this even if not required for determining mustWork, as it's important
                 // for legacy platform to allow SD access
-                val granted = context.checkGrantSelfUriPermission(
-                    ContentUris.removeId(fileUri ?: uri),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
-                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                )
+                val granted = if (fileUri != null) fileUriGranted else
+                    context.checkGrantSelfUriPermission(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ContentUris
+                            .removeId(uri) else getBaseUriForMediaType(null,
+                            guessMediaTypeFromUri(uri) ?: MEDIA_TYPE_NONE),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    )
                 val mustWork = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || granted
                         || isOwned(context, ownerPackageName!!) || isMediaTypeForQ(mediaType!!)
                         && (isManager ?: hasWriteExternalStorage(context))
