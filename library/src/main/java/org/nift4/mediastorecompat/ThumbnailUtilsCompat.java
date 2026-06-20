@@ -264,32 +264,7 @@ public class ThumbnailUtilsCompat {
         }
 
         if (bitmap == null && exif != null) {
-            byte[] raw;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                raw = exif.getThumbnailBytes();
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                try {
-                    long[] offset = exif.getThumbnailRange();
-                    if (offset != null && offset[0] > 0 && offset[1] <= 64 * 1024) {
-                        raw = new byte[(int) offset[1]];
-                        ParcelFileDescriptor fd = ParcelFileDescriptor.open(file,
-                                ParcelFileDescriptor.MODE_READ_ONLY);
-                        Os.lseek(fd.getFileDescriptor(), offset[0], OsConstants.SEEK_SET);
-                        if (Os.read(fd.getFileDescriptor(), raw, 0, raw.length)
-                                != raw.length) {
-                            raw = null;
-                        }
-                        fd.close();
-                    } else {
-                        raw = exif.getThumbnail();
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "failed to get thumbnail from offset", e);
-                    raw = exif.getThumbnail();
-                }
-            } else {
-                raw = exif.getThumbnail();
-            }
+            byte[] raw = exif.getThumbnail();
             if (raw != null) {
                 if (Build.VERSION.SDK_INT == Build.VERSION_CODES.P) {
                     try {
@@ -301,6 +276,9 @@ public class ThumbnailUtilsCompat {
                 } else {
                     bitmap = decodeBitmap(raw, size, signal);
                 }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // if it's uncompressed
+                bitmap = exif.getThumbnailBitmap();
             }
         }
 

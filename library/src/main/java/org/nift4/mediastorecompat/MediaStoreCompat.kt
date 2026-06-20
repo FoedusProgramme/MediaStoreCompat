@@ -34,6 +34,10 @@ import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Point
+//noinspection ExifInterface
+import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -62,7 +66,11 @@ import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
 import androidx.core.graphics.createBitmap
 import androidx.core.net.toUri
+import androidx.core.os.BundleCompat
 import androidx.core.provider.DocumentsContractCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.nift4.mediastorecompat.MediaStoreCompat.MEDIA_TYPE_AUDIO
 import org.nift4.mediastorecompat.MediaStoreCompat.MEDIA_TYPE_DOCUMENT
 import org.nift4.mediastorecompat.MediaStoreCompat.MEDIA_TYPE_IMAGE
@@ -73,11 +81,8 @@ import org.nift4.mediastorecompat.MediaStoreCompat.MEDIA_TYPE_VIDEO
 import org.nift4.mediastorecompat.MediaStoreCompat.PERMISSION_DELETE
 import org.nift4.mediastorecompat.MediaStoreCompat.PERMISSION_UPDATE_SQL
 import org.nift4.mediastorecompat.MediaStoreCompat.PERMISSION_UPDATE_SQL_FROM_WELL_DEFINED_PARENT
+import org.nift4.mediastorecompat.MediaStoreCompat.adoptFile
 import org.nift4.mediastorecompat.MediaStoreCompat.create
-import org.nift4.mediastorecompat.MediaStoreCompat.createDeleteRequest
-import org.nift4.mediastorecompat.MediaStoreCompat.createFavoriteRequest
-import org.nift4.mediastorecompat.MediaStoreCompat.createTrashRequest
-import org.nift4.mediastorecompat.MediaStoreCompat.createWriteRequest
 import org.nift4.mediastorecompat.MediaStoreCompat.delete
 import org.nift4.mediastorecompat.MediaStoreCompat.disableCanBecomeManager
 import org.nift4.mediastorecompat.MediaStoreCompat.efficientMove
@@ -85,18 +90,18 @@ import org.nift4.mediastorecompat.MediaStoreCompat.finishCreate
 import org.nift4.mediastorecompat.MediaStoreCompat.getBaseUriForMediaType
 import org.nift4.mediastorecompat.MediaStoreCompat.getDocumentUri
 import org.nift4.mediastorecompat.MediaStoreCompat.getDocumentUriEx
-import org.nift4.mediastorecompat.MediaStoreCompat.markIsFavoriteStatus
+import org.nift4.mediastorecompat.MediaStoreCompat.getMediaUriForFile
 import org.nift4.mediastorecompat.MediaStoreCompat.markIsTrashedStatus
 import org.nift4.mediastorecompat.MediaStoreCompat.needRequestBytesWrite
 import org.nift4.mediastorecompat.MediaStoreCompat.needRequestCreate
-import org.nift4.mediastorecompat.MediaStoreCompat.needRequestDelete
 import org.nift4.mediastorecompat.MediaStoreCompat.needRequestEfficientMove
-import org.nift4.mediastorecompat.MediaStoreCompat.needRequestFavorite
 import org.nift4.mediastorecompat.MediaStoreCompat.needRequestSqlUpdate
-import org.nift4.mediastorecompat.MediaStoreCompat.needRequestTrash
-import org.nift4.mediastorecompat.MediaStoreCompat.openFileDescriptor
+import org.nift4.mediastorecompat.MediaStoreCompat.openOutputStream
+import org.nift4.mediastorecompat.MediaStoreCompat.scanFile
+import org.nift4.mediastorecompat.MediaStoreCompat.willDeleteRequestBeUserVisible
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -106,7 +111,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
-import kotlin.text.substringAfterLast
+import kotlin.random.Random
 
 /**
  * Backport of media batch permission request and Storage Access Framework (SAF) interoperability
@@ -1742,78 +1747,91 @@ object MediaStoreCompat {
             return context.contentResolver.loadThumbnail(uri, size, cancellationSignal)
         }
         var mediaType: Int? = null
-        queryMissing(context, uri, null, null,
-            null, null, needsOwner = false, needsFile = false,
-            needsType = true, needsIsDownload = false) { _, type, _, _ ->
-            mediaType = type
+        if (uri.pathSegments[1] != MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI.pathSegments[1]
+            || uri.pathSegments[2] != MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI
+                .pathSegments[2]) {
+            queryMissing(
+                context, uri, null, null,
+                null, null, needsOwner = false, needsFile = false,
+                needsType = true, needsIsDownload = false
+            ) { _, type, _, _ ->
+                mediaType = type
+            }
         }
         when (mediaType) {
             MEDIA_TYPE_IMAGE -> {
                 val kind = when {
                     size.width <= 96 && size.height <= 96 ->
                         @Suppress("deprecation") MediaStore.Images.Thumbnails.MICRO_KIND
-                    size.width <= 512 && size.height <= 384 ->
+                    else ->
                         @Suppress("deprecation") MediaStore.Images.Thumbnails.MINI_KIND
-                    else -> @Suppress("deprecation")
-                    MediaStore.Images.Thumbnails.FULL_SCREEN_KIND
                 }
                 val id = ContentUris.parseId(uri)
+                val gid = Random.nextLong()
+                cancellationSignal?.throwIfCanceled()
                 cancellationSignal?.setOnCancelListener {
                     @Suppress("deprecation")
                     MediaStore.Images.Thumbnails.cancelThumbnailRequest(
-                        context.contentResolver, id)
+                        context.contentResolver, id, gid)
                 }
                 @Suppress("deprecation")
-                return MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver,
-                    id, kind, null)
-                    ?: throw IOException("Failed to generate thumbnail (no details available)")
+                return try {
+                    MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver,
+                        id, gid, kind, null)
+                } finally {
+                    cancellationSignal?.setOnCancelListener(null)
+                } ?: throw IOException("Failed to generate thumbnail (no details available)")
             }
             MEDIA_TYPE_VIDEO -> {
                 val kind = when {
                     size.width <= 96 && size.height <= 96 ->
                         @Suppress("deprecation") MediaStore.Video.Thumbnails.MICRO_KIND
-                    size.width <= 512 && size.height <= 384 ->
+                    else ->
                         @Suppress("deprecation") MediaStore.Video.Thumbnails.MINI_KIND
-                    else -> @Suppress("deprecation")
-                    MediaStore.Video.Thumbnails.FULL_SCREEN_KIND
                 }
                 val id = ContentUris.parseId(uri)
+                val gid = Random.nextLong()
+                cancellationSignal?.throwIfCanceled()
                 cancellationSignal?.setOnCancelListener {
                     @Suppress("deprecation")
                     MediaStore.Video.Thumbnails.cancelThumbnailRequest(
-                        context.contentResolver, id)
+                        context.contentResolver, id, gid)
                 }
                 @Suppress("deprecation")
-                return MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver,
-                    id, kind, null)
-                    ?: throw IOException("Failed to generate thumbnail (no details available)")
+                return try {
+                    MediaStore.Video.Thumbnails.getThumbnail(
+                        context.contentResolver,
+                        id, gid, kind, null
+                    )
+                } finally {
+                    cancellationSignal?.setOnCancelListener(null)
+                } ?: throw IOException("Failed to generate thumbnail (no details available)")
             }
-            MEDIA_TYPE_AUDIO -> {
-                val thumbUri = ContentUris.appendId(MediaStore.Audio.Media
-                    .EXTERNAL_CONTENT_URI.buildUpon(), ContentUris.parseId(uri))
-                    .appendPath("albumart").build()
+            else -> {
                 cancellationSignal?.throwIfCanceled()
                 try {
-                    return context.contentResolver.openFileDescriptor(thumbUri, "r")
-                        .use { pfdInput ->
-                            pfdInput
-                                ?: throw IOException("No thumbnail, perhaps this song has no artwork?")
-                            cancellationSignal?.throwIfCanceled()
-                            val maxSize = max(size.width, size.height)
-                            val opts = BitmapFactory.Options()
-                            opts.inJustDecodeBounds = true
-                            BitmapFactory.decodeFileDescriptor(
-                                pfdInput.fileDescriptor, null, opts
-                            )
-                            cancellationSignal?.throwIfCanceled()
-                            opts.inJustDecodeBounds = false
-                            val widthSample = opts.outWidth / maxSize
-                            val heightSample = opts.outHeight / maxSize
-                            opts.inSampleSize = max(widthSample, heightSample)
-                            BitmapFactory.decodeFileDescriptor(
-                                pfdInput.fileDescriptor, null, opts
-                            )
-                        }
+                    return openTypedAssetFileDescriptor(context, uri,
+                        "image/jpeg", Bundle().apply { putParcelable(
+                            ContentResolver.EXTRA_SIZE, Point(size.width, size.height))
+                                                     }, cancellationSignal).use { pfdInput ->
+                        pfdInput
+                            ?: throw IOException("No thumbnail, perhaps this song has no artwork?")
+                        cancellationSignal?.throwIfCanceled()
+                        val maxSize = max(size.width, size.height)
+                        val opts = BitmapFactory.Options()
+                        opts.inJustDecodeBounds = true
+                        BitmapFactory.decodeFileDescriptor(
+                            pfdInput.fileDescriptor, null, opts
+                        )
+                        cancellationSignal?.throwIfCanceled()
+                        opts.inJustDecodeBounds = false
+                        val widthSample = opts.outWidth / maxSize
+                        val heightSample = opts.outHeight / maxSize
+                        opts.inSampleSize = max(widthSample, heightSample)
+                        BitmapFactory.decodeFileDescriptor(
+                            pfdInput.fileDescriptor, null, opts
+                        )
+                    }
                 } catch (e: OperationCanceledException) {
                     throw e
                 } catch (e: IOException) {
@@ -1822,7 +1840,6 @@ object MediaStoreCompat {
                     throw IOException("Can't load thumbnail for $uri", e)
                 }
             }
-            else -> throw IOException("Can't load thumbnail for $uri due to unsupported type")
         }
     }
 
@@ -2795,8 +2812,7 @@ object MediaStoreCompat {
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
         val isManager = isManager ?: isManager(context)
         val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
-        val inputStream = openInputStream(context, uri, ownerPackageName,
-            mediaType, mediaFile, isManager, volumesCache, persistedUriPermissionsCache)!!
+        val inputStream = openInputStream(context, uri, mediaType)!!
         var uri = uri
         var newUri: Uri? = null
         try {
@@ -4865,7 +4881,7 @@ object MediaStoreCompat {
     }
 
     /**
-     * Throws [SecurityException] if [needRequestBytesWrite] returns true.
+     * Throws [SecurityException] if [needRequestBytesWrite] returns true and mode is not "r".
      */
     private fun <T> openBytesWriteCommon(context: Context, mediaUri: Uri, mode: String,
                                          callback: (Uri) -> T, ownerPackageName: String? = null,
@@ -4904,29 +4920,30 @@ object MediaStoreCompat {
             return callback(mediaUri)
         }
         queryMissing(context, mediaUri, ownerPackageName, mediaType, null, mediaFile,
-            needsOwner = true, needsFile = true,
-            needsType = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q, needsIsDownload = false) {
-                ownerPackageNameH, mediaTypeH, _, mediaFileH ->
+            needsOwner = Build.VERSION.SDK_INT != Build.VERSION_CODES.Q || mode != "r",
+            needsFile = Build.VERSION.SDK_INT != Build.VERSION_CODES.Q || mode != "r",
+            needsType = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && mode != "r",
+            needsIsDownload = false) { ownerPackageNameH, mediaTypeH, _, mediaFileH ->
             mediaType = mediaTypeH
             mediaFile = mediaFileH
             ownerPackageName = ownerPackageNameH
         }
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
-            if (mediaType == MEDIA_TYPE_PLAYLIST) {
+            if (guessMediaTypeFromUri(mediaUri) == MEDIA_TYPE_PLAYLIST) {
                 // Work around "IllegalArgumentException: Invalid column owner_package_name"
                 mediaUri = ContentUris.withAppendedId(FILES_EXTERNAL_CONTENT_URI,
                     ContentUris.parseId(mediaUri))
             }
             // On Q, writing through MediaStore Uri ensures it will stay up to date as it will
             // trigger an automatic rescan. To ensure we can write if possible, try to get a grant.
-            if (context.checkGrantSelfUriPermission(ContentUris.removeId(mediaUri),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (mode == "r" || context.checkGrantSelfUriPermission(ContentUris.removeId(
+                    mediaUri), Intent.FLAG_GRANT_READ_URI_PERMISSION
                             or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
                             or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                || isOwned(context, ownerPackageName!!) || context.checkSelfUriPermission(
-                    mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+                || isOwned(context, ownerPackageName!!) || context.checkSelfUriPermission(mediaUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
                 return callback(mediaUri)
         }
         val volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
@@ -5008,7 +5025,51 @@ object MediaStoreCompat {
     }
 
     /**
-     * Throws [SecurityException] if [needRequestBytesWrite] returns true.
+     * Throws [SecurityException] if [needRequestBytesWrite] returns true and mode is not "r",
+     * otherwise throws [SecurityException] if file can't be read.
+     *
+     * @see ContentResolver.openAssetFile
+     */
+    @JvmStatic
+    @JvmOverloads
+    @Deprecated(
+        "This is an alias for openAssetFileDescriptor which should be used instead",
+        replaceWith = ReplaceWith(expression = "MediaStoreCompat.openAssetFileDescriptor"))
+    fun openAssetFile(context: Context, mediaUri: Uri, mode: String,
+                                signal: CancellationSignal?, ownerPackageName: String? = null,
+                                mediaType: Int? = null, mediaFile: File? = null,
+                                isManager: Boolean? = null,
+                                volumesCache: List<StorageVolumeCompat>? = null,
+                                persistedUriPermissionsCache: List<UriPermission>? = null): AssetFileDescriptor? {
+        return openBytesWriteCommon(context, mediaUri, mode, {
+            context.contentResolver.openAssetFileDescriptor(it, mode, signal)
+        }, ownerPackageName, mediaType, mediaFile, isManager,
+            volumesCache, persistedUriPermissionsCache)
+    }
+
+    /**
+     * Throws [SecurityException] if [needRequestBytesWrite] returns true and mode is not "r",
+     * otherwise throws [SecurityException] if file can't be read.
+     *
+     * @see ContentResolver.openAssetFileDescriptor
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun openAssetFileDescriptor(context: Context, mediaUri: Uri, mode: String,
+                                signal: CancellationSignal?, ownerPackageName: String? = null,
+                                mediaType: Int? = null, mediaFile: File? = null,
+                                isManager: Boolean? = null,
+                                volumesCache: List<StorageVolumeCompat>? = null,
+                                persistedUriPermissionsCache: List<UriPermission>? = null): AssetFileDescriptor? {
+        return openBytesWriteCommon(context, mediaUri, mode, {
+            context.contentResolver.openAssetFileDescriptor(it, mode, signal)
+        }, ownerPackageName, mediaType, mediaFile, isManager,
+            volumesCache, persistedUriPermissionsCache)
+    }
+
+    /**
+     * When a writing (non-"r") mode is used, [needRequestBytesWrite] must return true for the [Uri],
+     * or [SecurityException] will be thrown.
      *
      * @see ContentResolver.openAssetFileDescriptor
      */
@@ -5026,23 +5087,288 @@ object MediaStoreCompat {
     }
 
     /**
+     * Typed asset files in the MediaStore context are only used for one single feature: if the MIME
+     * type matches `image/jpeg` or `image/\*`, and `opts` contains a [android.graphics.Point] as
+     * [ContentResolver.EXTRA_SIZE], then a JPEG thumbnail for this media item is loaded. That is
+     * only supported for album, audio, image or video [Uri]s.
+     *
+     * In all other cases, both the AOSP implementation and this backport fall back to
+     * [openFileDescriptor].
+     *
+     * Note that size is sometimes (but not always) ignored when loading a thumbnail, so the caller
+     * should ensure to limit the size while decoding as well.
+     *
+     * @see ContentResolver.openTypedAssetFile
+     */
+    @JvmStatic
+    @JvmOverloads
+    @Deprecated(
+        "This is an alias for openAssetFileDescriptor which should be used instead",
+        replaceWith = ReplaceWith(expression = "MediaStoreCompat.openAssetFileDescriptor"))
+    fun openTypedAssetFile(context: Context, mediaUri: Uri, mimeTypeFilter: String, opts: Bundle?,
+                           signal: CancellationSignal?, mediaType: Int? = null): AssetFileDescriptor? {
+        return openTypedAssetFileDescriptor(context, mediaUri, mimeTypeFilter, opts, signal,
+            mediaType)
+    }
+
+    /**
+     * Typed asset files in the MediaStore context are only used for one single feature: if the MIME
+     * type matches `image/jpeg` or `image/\*`, and `opts` contains a [android.graphics.Point] as
+     * [ContentResolver.EXTRA_SIZE], then a JPEG thumbnail for this media item is loaded. That is
+     * only supported for album, audio, image or video [Uri]s.
+     *
+     * In all other cases, both the AOSP implementation and this backport fall back to
+     * [openFileDescriptor].
+     *
+     * Note that size is sometimes (but not always) ignored when loading a thumbnail, so the caller
+     * should ensure to limit the size while decoding as well. There is also an upper limit for size
+     * because the thumbnails get cached, so if a high-quality version is required,
+     * [ThumbnailUtilsCompat] should be preferred.
+     *
+     * @see ContentResolver.openTypedAssetFileDescriptor
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun openTypedAssetFileDescriptor(context: Context, mediaUri: Uri, mimeType: String,
+                                     opts: Bundle?, signal: CancellationSignal?,
+                                     mediaType: Int? = null): AssetFileDescriptor? {
+        if (mediaUri.authority?.equals(MediaStore.AUTHORITY) == false)
+            throw IllegalArgumentException("Expected a MediaStore uri: $mediaUri")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && (mimeType == "image/*" || mimeType ==
+                    "image/jpeg") && opts?.containsKey(ContentResolver.EXTRA_SIZE) == true) {
+            val size = BundleCompat.getParcelable(opts, ContentResolver.EXTRA_SIZE,
+                Point::class.java)!!.let { p -> Size(p.x, p.y) }
+            val recompressQuality = opts.getInt("recompressQuality", 90)
+            if (mediaUri.pathSegments[1] == MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI
+                    .pathSegments[1] && mediaUri.pathSegments[2] == MediaStore.Audio.Albums
+                    .EXTERNAL_CONTENT_URI.pathSegments[2]) {
+                val artUri = ContentUris.appendId(Uri.Builder().scheme(ContentResolver
+                    .SCHEME_CONTENT).authority(MediaStore.AUTHORITY).appendPath(
+                    VOLUME_EXTERNAL).appendPath("albumart"),
+                    ContentUris.parseId(mediaUri)).build()
+                return context.contentResolver.openAssetFileDescriptor(artUri, "r",
+                    signal)
+            }
+            var mediaType: Int? = null
+            queryMissing(
+                context, mediaUri, null, null,
+                null, null, needsOwner = false, needsFile = false,
+                needsType = true, needsIsDownload = false
+            ) { _, type, _, _ ->
+                mediaType = type
+            }
+            when (mediaType) {
+                MEDIA_TYPE_AUDIO -> {
+                    val thumbUri = ContentUris.appendId(MediaStore.Audio.Media
+                        .EXTERNAL_CONTENT_URI.buildUpon(), ContentUris.parseId(
+                        mediaUri)).appendPath("albumart").build()
+                    return context.contentResolver.openAssetFileDescriptor(thumbUri, "r",
+                        signal)
+                }
+                MEDIA_TYPE_IMAGE, MEDIA_TYPE_VIDEO -> {}
+                else -> throw IOException("Can't load thumbnail for $mediaUri: unsupported type")
+            }
+            // We only support MINI_KIND here, MICRO_KIND and its MiniThumbFile are too complex.
+            val id = ContentUris.parseId(mediaUri)
+            val projection = arrayOf(MediaStore.MediaColumns._ID)
+            val thumbUri = if (mediaType == MEDIA_TYPE_IMAGE) @Suppress("deprecation")
+                MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI
+            else @Suppress("deprecation") MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI
+            context.contentResolver.query(thumbUri, projection, if (mediaType ==
+                MEDIA_TYPE_IMAGE) "image_id=?" else "video_id=?", arrayOf(
+                id.toString()), null, signal).use {
+                signal?.throwIfCanceled()
+                if (it != null && it.moveToFirst()) {
+                    try {
+                        return context.contentResolver.openAssetFileDescriptor(ContentUris
+                            .withAppendedId(thumbUri, it.getLong(0)),
+                            "r", signal)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "failed to open thumbnail, regenerating", e)
+                    }
+                }
+            }
+            val gid = Random.nextLong()
+            signal?.throwIfCanceled()
+            signal?.setOnCancelListener {
+                if (mediaType == MEDIA_TYPE_IMAGE) {
+                    @Suppress("deprecation")
+                    MediaStore.Images.Thumbnails.cancelThumbnailRequest(
+                        context.contentResolver, id, gid)
+                } else {
+                    @Suppress("deprecation")
+                    MediaStore.Video.Thumbnails.cancelThumbnailRequest(
+                        context.contentResolver, id, gid)
+                }
+            }
+            try {
+                context.contentResolver.query(thumbUri.buildUpon().appendQueryParameter(
+                    "blocking", "1").appendQueryParameter("orig_id", id.toString())
+                    .appendQueryParameter("group_id", gid.toString()).build(), projection,
+                    null, null, null, signal)
+            } finally {
+                signal?.setOnCancelListener(null)
+            }.use { c ->
+                if (c == null)
+                    throw IOException("Tried to generate thumbnail for file that doesn't exist")
+                if (c.moveToFirst()) {
+                    signal?.throwIfCanceled()
+                    return context.contentResolver.openAssetFileDescriptor(ContentUris
+                        .withAppendedId(thumbUri, c.getLong(0)),
+                        "r", signal)
+                }
+            }
+            // We probably run out of space, so create the thumbnail in memory.
+            signal?.throwIfCanceled()
+            context.contentResolver.query(ContentUris.withAppendedId(
+                getBaseUriForMediaType(null, mediaType), id),
+                arrayOf(MediaStore.MediaColumns.DATA), null,
+                null, null, signal).use { c ->
+                if (c == null || !c.moveToFirst())
+                    throw IOException("Tried to generate thumbnail for file that doesn't exist")
+                signal?.throwIfCanceled()
+                val file = File(c.getString(0))
+                // First, attempt to pass through unmodified compressed data...
+                var bytes: ByteArray? = null
+                try {
+                    if (mediaType == MEDIA_TYPE_IMAGE) {
+                        if (getMediaTypeForMime(guessMimeTypeFromFileName(file.name)) ==
+                            MEDIA_TYPE_IMAGE) {
+                            val exif = @SuppressLint("ExifInterface")
+                            ExifInterface(file.absolutePath)
+                            val orientation = when (exif.getAttributeInt(
+                                ExifInterface
+                                    .TAG_ORIENTATION, 0
+                            )) {
+                                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                                else -> 0
+                            }
+                            if (orientation == 0)
+                                bytes = exif.thumbnail
+                        }
+                    } else {
+                        val mmr = MediaMetadataRetriever()
+                        mmr.setDataSource(file.absolutePath)
+                        bytes = mmr.embeddedPicture
+                        mmr.close()
+                        if (mimeType != "image/*") {
+                            val options = BitmapFactory.Options().apply {
+                                inJustDecodeBounds = true
+                            }
+                            BitmapFactory.decodeByteArray(
+                                bytes, 0, bytes!!.size,
+                                options
+                            )
+                            if (options.outMimeType != mimeType) {
+                                Log.w(TAG, "found cover of type ${options.outMimeType}" +
+                                            ", have to recompress it to JPEG")
+                                bytes = null
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "failed to find thumbnail", e)
+                }
+                var bitmap: Bitmap? = null
+                if (bytes == null) {
+                    // Well we can just decode properly and then encode as JPEG
+                    bitmap = if (mediaType == MEDIA_TYPE_IMAGE) {
+                        ThumbnailUtilsCompat.createImageThumbnail(file, size, signal)
+                    } else {
+                        ThumbnailUtilsCompat.createVideoThumbnail(file, size, signal)
+                    }
+                }
+                val pipe = ParcelFileDescriptor.createPipe()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        FileOutputStream(pipe[1].fileDescriptor).use { fos ->
+                            if (bytes != null) {
+                                fos.write(bytes)
+                            } else {
+                                bitmap!!.compress(Bitmap.CompressFormat.JPEG,
+                                    recompressQuality, fos)
+                            }
+                        }
+                    } finally {
+                        pipe[1].close()
+                        bitmap?.recycle()
+                    }
+                }
+                return AssetFileDescriptor(pipe[0], 0,
+                    AssetFileDescriptor.UNKNOWN_LENGTH /* for backward compatibility */)
+            }
+        }
+        return openBytesWriteCommon(context, mediaUri, "r", {
+            context.contentResolver.openTypedAssetFileDescriptor(it, mimeType, opts,
+                signal)
+        }, null, mediaType, null, null,
+            null, null)
+    }
+
+    /**
+     * Typed asset files in the MediaStore context are only used for one single feature: if the MIME
+     * type matches `image/jpeg` or `image/\*`, and `opts` contains a [android.graphics.Point] as
+     * [ContentResolver.EXTRA_SIZE], then a JPEG thumbnail for this media item is loaded. That is
+     * only supported for album, audio, image or video [Uri]s.
+     *
+     * In all other cases, both the AOSP implementation and this backport fall back to
+     * [openFileDescriptor].
+     *
+     * Note that size is sometimes (but not always) ignored when loading a thumbnail, so the caller
+     * should ensure to limit the size while decoding as well.
+     *
+     * @see ContentResolver.openTypedAssetFileDescriptor
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun openTypedAssetFileDescriptor(context: Context, mediaUri: Uri, mimeType: String,
+                                     opts: Bundle?, mediaType: Int? = null): AssetFileDescriptor? {
+        return openTypedAssetFileDescriptor(
+            context, mediaUri, mimeType, opts, signal = null, mediaType)
+    }
+
+    /**
      * @see ContentResolver.openInputStream
      */
     @JvmStatic
     @JvmOverloads
-    fun openInputStream(context: Context, mediaUri: Uri,
-                         ownerPackageName: String? = null, mediaType: Int? = null,
-                         mediaFile: File? = null, isManager: Boolean? = null,
-                         volumesCache: List<StorageVolumeCompat>? = null,
-                         persistedUriPermissionsCache: List<UriPermission>? = null): InputStream? {
+    fun openInputStream(context: Context, mediaUri: Uri, mediaType: Int? = null): InputStream? {
         return openBytesWriteCommon(context, mediaUri, "r", {
             context.contentResolver.openInputStream(it)
-        }, ownerPackageName, mediaType, mediaFile, isManager,
-            volumesCache, persistedUriPermissionsCache)
+        }, null, mediaType, null, null,
+            null, null)
     }
 
     /**
-     * Throws [SecurityException] if [needRequestBytesWrite] returns true.
+     * @see ContentResolver.getType
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun getType(context: Context, mediaUri: Uri, mediaType: Int? = null): String? {
+        if (mediaUri.authority?.equals(MediaStore.AUTHORITY) == false)
+            throw IllegalArgumentException("Expected a MediaStore uri: $mediaUri")
+        if (guessMediaTypeFromUri(mediaUri) == MEDIA_TYPE_AUDIO &&
+            mediaUri.lastPathSegment!! == "albumart" || mediaUri.pathSegments[1] == @Suppress(
+                "deprecation") MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI
+                    .pathSegments[1] && mediaUri.pathSegments[2] == @Suppress(
+                "deprecation") MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI
+                    .pathSegments[2] || mediaUri.pathSegments[1] == @Suppress(
+                "deprecation") MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI
+                .pathSegments[1] && mediaUri.pathSegments[2] == @Suppress(
+                "deprecation") MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI
+                .pathSegments[2])
+            return "image/jpeg"
+        return openBytesWriteCommon(context, mediaUri, "r", {
+            context.contentResolver.getType(it)
+        }, null, mediaType, null, null,
+            null, null)
+    }
+
+    /**
+     * When a writing (non-"r") mode is used, [needRequestBytesWrite] must return true for the [Uri],
+     * or [SecurityException] will be thrown.
      *
      * @see ContentResolver.openOutputStream
      */
@@ -5060,7 +5386,51 @@ object MediaStoreCompat {
     }
 
     /**
-     * Throws [SecurityException] if [needRequestBytesWrite] returns true.
+     * When a writing (non-"r") mode is used, [needRequestBytesWrite] must return true for the [Uri],
+     * or [SecurityException] will be thrown.
+     *
+     * @see ContentResolver.openFile
+     */
+    @JvmStatic
+    @JvmOverloads
+    @Deprecated(
+        "This is an alias for openFileDescriptor which should be used instead",
+        replaceWith = ReplaceWith(expression = "MediaStoreCompat.openFileDescriptor"))
+    fun openFile(context: Context, mediaUri: Uri, mode: String,
+                      signal: CancellationSignal?, ownerPackageName: String? = null,
+                      mediaType: Int? = null, mediaFile: File? = null,
+                      isManager: Boolean? = null,
+                      volumesCache: List<StorageVolumeCompat>? = null,
+                      persistedUriPermissionsCache: List<UriPermission>? = null): ParcelFileDescriptor? {
+        return openBytesWriteCommon(context, mediaUri, mode, {
+            context.contentResolver.openFileDescriptor(it, mode, signal)
+        }, ownerPackageName, mediaType, mediaFile, isManager,
+            volumesCache, persistedUriPermissionsCache)
+    }
+
+    /**
+     * When a writing (non-"r") mode is used, [needRequestBytesWrite] must return true for the [Uri],
+     * or [SecurityException] will be thrown.
+     *
+     * @see ContentResolver.openFileDescriptor
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun openFileDescriptor(context: Context, mediaUri: Uri, mode: String,
+                           signal: CancellationSignal?, ownerPackageName: String? = null,
+                           mediaType: Int? = null, mediaFile: File? = null,
+                           isManager: Boolean? = null,
+                           volumesCache: List<StorageVolumeCompat>? = null,
+                           persistedUriPermissionsCache: List<UriPermission>? = null): ParcelFileDescriptor? {
+        return openBytesWriteCommon(context, mediaUri, mode, {
+            context.contentResolver.openFileDescriptor(it, mode, signal)
+        }, ownerPackageName, mediaType, mediaFile, isManager,
+            volumesCache, persistedUriPermissionsCache)
+    }
+
+    /**
+     * When a writing (non-"r") mode is used, [needRequestBytesWrite] must return true for the [Uri],
+     * or [SecurityException] will be thrown.
      *
      * @see ContentResolver.openFileDescriptor
      */
