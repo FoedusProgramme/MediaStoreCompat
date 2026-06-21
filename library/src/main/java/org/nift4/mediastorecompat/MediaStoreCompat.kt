@@ -3082,6 +3082,8 @@ object MediaStoreCompat {
         }
         var displayName = newFile.name
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // It doesn't seem necessary to handle SDK 37 / S extension 22's .trash-storage here, as
+            // it will be handled by MediaProvider automatically.
             val pattern = Regex("""\.(pending|trashed)-\d+-(.+)""",
                 RegexOption.IGNORE_CASE)
             val match = pattern.matchEntire(newFile.name)
@@ -5564,9 +5566,9 @@ object MediaStoreCompat {
      *   and the error is both logged and available in the returned [Intent] as [String] extras
      *   `"ErrorMsg"` (for one-line message) and `"StackTrace"` (for full error logs).
      *
-     * Note: folders can be trashed, but all files inside the folder have to be trashed separately.
-     * TODO: really? or is trashing folders only since S since trashFile API is S+?
-     *  and if that _is_ true then the method should do it recursively by itself?
+     * Note: folders can't be trashed with this API, as trashing folders, which is supported since
+     * API 37 or S extensions 22 using [MediaStore.trashFile], requires
+     * [Manifest.permission.MANAGE_EXTERNAL_STORAGE].
      *
      * @see MediaStore.createTrashRequest
      */
@@ -5650,10 +5652,14 @@ object MediaStoreCompat {
      * ID is returned as part of a valid media [Uri]. In all other cases the media [Uri] is returned
      * unmodified.
      *
-     * Note: folders can be trashed, but all files inside the folder have to be trashed separately.
-     * TODO: really? or is trashing folders only since S since trashFile API is S+?
-     *  and if that _is_ true then the method should do it recursively by itself?
+     * Note: Trashing folders is supported since API 37 or S extensions 22 using
+     * [MediaStore.trashFile], which requires [Manifest.permission.MANAGE_EXTERNAL_STORAGE].
      */
+    // TODO: investigate if, on API 37+ or S extensions 22+, the need for MANAGE_EXTERNAL_STORAGE
+    //  to trash folders could be bypassed using FUSE, as it seems moving to the following should
+    //  work (provided we WR every file, move them out of dir, move dir and then move them back in)
+    //     /sdcard/.trash-storage/<path from volume>/.trashed-<expiry>-<name>
+    //  if it is, createTrashRequest should also be updated to support handling WR for this
     @RequiresApi(Build.VERSION_CODES.R)
     @JvmStatic
     @JvmOverloads
@@ -5729,6 +5735,26 @@ object MediaStoreCompat {
                 )
             }
             values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+        } else if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN ||
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 22) &&
+            canBecomeManager(context) && (isManager ?: Environment.isExternalStorageManager())) {
+            // If on a new enough Android version and MANAGE_EXTERNAL_STORAGE is granted, use the
+            // modern trash API which supports directories.
+            queryMissing(
+                context, uri, ownerPackageName, mediaType, isDownload,
+                null, needsOwner = false, needsType = false, needsIsDownload = false,
+                needsFile = true
+            ) { _, _, _, file ->
+                mediaFile = file
+            }
+            if (isTrashed) {
+                MediaStore.trashFile(context.contentResolver, mediaFile!!.absolutePath)
+            } else {
+                MediaStore.restoreFileFromTrash(context.contentResolver, mediaFile!!.absolutePath,
+                    null)
+            }
+            return uri
         }
         values.put(MediaStore.MediaColumns.IS_TRASHED, if (isTrashed) 1 else 0)
         if (context.contentResolver.update(uri, values, null, null) != 1) {
