@@ -504,7 +504,7 @@ object MediaStoreCompat {
                     if (cursor != null && cursor.moveToFirst()) {
                         val volumeName = cursor.getString(cursor.getColumnIndexOrThrow(
                             MediaStore.MediaColumns.VOLUME_NAME))
-                        (MediaStore.AUTHORITY_URI.buildUpon()
+                        return (MediaStore.AUTHORITY_URI.buildUpon()
                             .appendPath(volumeName).build().toString() + uri
                             .toString().substring(
                                 MediaStore.AUTHORITY_URI.buildUpon()
@@ -2970,9 +2970,7 @@ object MediaStoreCompat {
         queryMissing(context, uri, ownerPackageName, mediaType, isDownload,
             mediaFile, needsOwner = Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
                     || Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                    !supportsWriteRequestForSidecar(),
-            needsFile = Build.VERSION.SDK_INT < Build.VERSION_CODES.R || forceMove ||
-                    isAffectedByMoveGenericVolumeBug() || volume != null, needsType =
+                    !supportsWriteRequestForSidecar(), needsFile = true, needsType =
                 Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !forceMove
                     || !supportsWriteRequestForSidecar(),
             needsIsDownload = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !forceMove) {
@@ -2984,9 +2982,10 @@ object MediaStoreCompat {
         }
         if (volume != null) {
             mediaFile!!.assertVolumeIs(volume)
+        } else {
+            volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
+            volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         }
-        volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
-        volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile!!)
         val newFile = volume.requireCanonicalDirectory().resolve(newRelativePath)
         if (newFile.exists()) {
             throw IllegalArgumentException("Target file exists: $newFile")
@@ -3279,6 +3278,7 @@ object MediaStoreCompat {
                 }
             }
             if (fakeIsDownload || fakeMediaType != null) {
+                volumesCache = volumesCache ?: StorageManagerCompat.getStorageVolumes(context)
                 val volume = StorageManagerCompat.getVolumeForPath(volumesCache, mediaFile)
                 var baseUri: Uri? = getBaseUriForMediaType(volume.mediaStoreVolumeName,
                         fakeMediaType ?: MEDIA_TYPE_NONE, fakeIsDownload)

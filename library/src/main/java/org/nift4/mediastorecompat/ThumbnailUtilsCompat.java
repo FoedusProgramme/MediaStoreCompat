@@ -399,7 +399,9 @@ public class ThumbnailUtilsCompat {
         opts.inJustDecodeBounds = false;
         final int widthSample = opts.outWidth / maxSize;
         final int heightSample = opts.outHeight / maxSize;
-        opts.inSampleSize = Math.max(widthSample, heightSample);
+        final int sample = Math.max(widthSample, heightSample);
+        if (sample > 1)
+            opts.inSampleSize = sample;
         // Checkpoint before going deeper
         if (signal != null) signal.throwIfCanceled();
         return BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
