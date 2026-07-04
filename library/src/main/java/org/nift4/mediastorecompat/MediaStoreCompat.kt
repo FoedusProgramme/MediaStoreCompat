@@ -5252,9 +5252,12 @@ object MediaStoreCompat {
                         }
                     } else {
                         val mmr = MediaMetadataRetriever()
-                        mmr.setDataSource(file.absolutePath)
-                        bytes = mmr.embeddedPicture
-                        mmr.close()
+                        try {
+                            mmr.setDataSource(file.absolutePath)
+                            bytes = mmr.embeddedPicture
+                        } finally {
+                            mmr.close()
+                        }
                         if (mimeType != "image/*") {
                             val options = BitmapFactory.Options().apply {
                                 inJustDecodeBounds = true
@@ -5282,19 +5285,36 @@ object MediaStoreCompat {
                         ThumbnailUtilsCompat.createVideoThumbnail(file, size, signal)
                     }
                 }
+                if (signal?.isCanceled == true) {
+                    bitmap?.recycle()
+                    signal.throwIfCanceled()
+                }
                 val pipe = ParcelFileDescriptor.createPipe()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        FileOutputStream(pipe[1].fileDescriptor).use { fos ->
-                            if (bytes != null) {
-                                fos.write(bytes)
-                            } else {
-                                bitmap!!.compress(Bitmap.CompressFormat.JPEG,
-                                    recompressQuality, fos)
+                        ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { fos ->
+                            signal?.throwIfCanceled()
+                            signal?.setOnCancelListener {
+                                pipe[1].close() // Don't block forever
+                            }
+                            try {
+                                if (bytes != null) {
+                                    fos.write(bytes)
+                                } else {
+                                    bitmap!!.compress(
+                                        Bitmap.CompressFormat.JPEG,
+                                        recompressQuality, fos
+                                    )
+                                }
+                            } finally {
+                                signal?.setOnCancelListener(null)
                             }
                         }
+                    } catch (e: Exception) {
+                        if (signal?.isCanceled != true) {
+                            throw e
+                        }
                     } finally {
-                        pipe[1].close()
                         bitmap?.recycle()
                     }
                 }
