@@ -1701,12 +1701,11 @@ object MediaStoreCompat {
                 if (it.moveToFirst()) {
                     do {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            if (!isOwned(context, it.getStringOrNull(
+                            if (isOwned(context, it.getStringOrNull(
                                     ownerColumn!!) ?: "null"))
-                                scanFile(context, it.getString(dataColumn))
-                        } else {
-                            scanFile(context, it.getString(dataColumn))
+                                continue
                         }
+                        scanFile(context, it.getString(dataColumn))
                     } while (it.moveToNext())
                 }
             }
