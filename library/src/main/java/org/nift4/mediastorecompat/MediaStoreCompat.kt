@@ -46,6 +46,7 @@ import android.os.CancellationSignal
 import android.os.Environment
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.MemoryFile
 import android.os.OperationCanceledException
 import android.os.ParcelFileDescriptor
 import android.os.Process
@@ -99,7 +100,9 @@ import org.nift4.mediastorecompat.MediaStoreCompat.needRequestSqlUpdate
 import org.nift4.mediastorecompat.MediaStoreCompat.openOutputStream
 import org.nift4.mediastorecompat.MediaStoreCompat.scanFile
 import org.nift4.mediastorecompat.MediaStoreCompat.willDeleteRequestBeUserVisible
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
@@ -5237,6 +5240,7 @@ object MediaStoreCompat {
                             MEDIA_TYPE_IMAGE) {
                             val exif = @SuppressLint("ExifInterface")
                             ExifInterface(file.absolutePath)
+                            signal?.throwIfCanceled()
                             val orientation = when (exif.getAttributeInt(
                                 ExifInterface
                                     .TAG_ORIENTATION, 0
@@ -5246,6 +5250,7 @@ object MediaStoreCompat {
                                 ExifInterface.ORIENTATION_ROTATE_270 -> 270
                                 else -> 0
                             }
+                            signal?.throwIfCanceled()
                             if (orientation == 0)
                                 bytes = exif.thumbnail
                         }
@@ -5253,10 +5258,12 @@ object MediaStoreCompat {
                         val mmr = MediaMetadataRetriever()
                         try {
                             mmr.setDataSource(file.absolutePath)
+                            signal?.throwIfCanceled()
                             bytes = mmr.embeddedPicture
                         } finally {
                             mmr.close()
                         }
+                        signal?.throwIfCanceled()
                         if (mimeType != "image/*") {
                             val options = BitmapFactory.Options().apply {
                                 inJustDecodeBounds = true
@@ -5265,6 +5272,7 @@ object MediaStoreCompat {
                                 bytes, 0, bytes!!.size,
                                 options
                             )
+                            signal?.throwIfCanceled()
                             if (options.outMimeType != mimeType) {
                                 Log.w(TAG, "found cover of type ${options.outMimeType}" +
                                             ", have to recompress it to JPEG")
@@ -5275,18 +5283,43 @@ object MediaStoreCompat {
                 } catch (e: Exception) {
                     Log.w(TAG, "failed to find thumbnail", e)
                 }
-                var bitmap: Bitmap? = null
                 if (bytes == null) {
                     // Well we can just decode properly and then encode as JPEG
-                    bitmap = if (mediaType == MEDIA_TYPE_IMAGE) {
+                    signal?.throwIfCanceled()
+                    val bitmap = if (mediaType == MEDIA_TYPE_IMAGE) {
                         ThumbnailUtilsCompat.createImageThumbnail(file, size, signal)
                     } else {
                         ThumbnailUtilsCompat.createVideoThumbnail(file, size, signal)
                     }
+                    try {
+                        signal?.throwIfCanceled()
+                        val os = ByteArrayOutputStream()
+                        bitmap.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            recompressQuality, os
+                        )
+                        bytes = os.toByteArray()
+                    } finally {
+                        bitmap.recycle()
+                    }
                 }
-                if (signal?.isCanceled == true) {
-                    bitmap?.recycle()
-                    signal.throwIfCanceled()
+                signal?.throwIfCanceled()
+                try {
+                    val memoryFile = MemoryFile("${context.packageName}_MediaStoreCompat",
+                        bytes.size)
+                    val pfd = try {
+                        val fd = memoryFile.javaClass.getMethod("getFileDescriptor")
+                            .invoke(memoryFile) as FileDescriptor
+                        memoryFile.writeBytes(bytes, 0, 0,
+                            bytes.size)
+                        ParcelFileDescriptor.dup(fd)
+                    } finally {
+                        memoryFile.close() // will close the fd we just dup'ed and un-mmap it
+                    }
+                    return AssetFileDescriptor(pfd, 0,
+                        AssetFileDescriptor.UNKNOWN_LENGTH /* for backward compatibility */)
+                } catch (e: Exception) {
+                    Log.e(TAG, "failed to create ashmem file", e)
                 }
                 val pipe = ParcelFileDescriptor.createPipe()
                 CoroutineScope(Dispatchers.IO).launch {
@@ -5297,14 +5330,7 @@ object MediaStoreCompat {
                                 pipe[1].close() // Don't block forever
                             }
                             try {
-                                if (bytes != null) {
-                                    fos.write(bytes)
-                                } else {
-                                    bitmap!!.compress(
-                                        Bitmap.CompressFormat.JPEG,
-                                        recompressQuality, fos
-                                    )
-                                }
+                                fos.write(bytes)
                             } finally {
                                 signal?.setOnCancelListener(null)
                             }
@@ -5313,8 +5339,6 @@ object MediaStoreCompat {
                         if (signal?.isCanceled != true) {
                             throw e
                         }
-                    } finally {
-                        bitmap?.recycle()
                     }
                 }
                 return AssetFileDescriptor(pipe[0], 0,
