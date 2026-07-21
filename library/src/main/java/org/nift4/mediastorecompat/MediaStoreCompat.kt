@@ -1695,7 +1695,8 @@ object MediaStoreCompat {
                             arrayOf(context.packageName)) // TODO support shared uid? or not?
                     }
                     putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_ONLY)
-                }, null)!!.use {
+                }, null).use {
+                if (it == null) return
                 val dataColumn = it.getColumnIndexOrThrow(
                     MediaStore.Files.FileColumns.DATA)
                 val ownerColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
