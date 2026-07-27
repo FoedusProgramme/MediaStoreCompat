@@ -19,6 +19,8 @@ package org.nift4.mediastorecompat
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ContentValues
+import android.provider.MediaStore
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
@@ -29,6 +31,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.io.IOException
 
 /**
@@ -50,12 +53,72 @@ class ModernMiscTest : TestBase() {
     fun cleanUp() {
         executeShellCommand("rm /sdcard/Music/hello.mp3")
         executeShellCommand("rm /sdcard/Music/hello.docx")
+        executeShellCommand("rm /sdcard/Music/music.mp3")
+        executeShellCommand("rm /sdcard/Music/music.jpg")
         executeShellCommand("rm /sdcard/Download/Abcdefg.txt")
         executeShellCommand("rm /sdcard/Folder/Abcdefg.txt")
         executeShellCommand("rmdir /sdcard/Download/SoonTopLevel")
         executeShellCommand("rmdir /sdcard/TopLevel")
         executeShellCommand("rmdir /sdcard/Folder")
         executeShellCommand("rmdir /sdcard/Android/Abcdefg")
+    }
+
+    @Test
+    fun testWrongFolderMoveThrough3001Bug() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val mediaUri = scanFile(context, "/sdcard/Music/hello.mp3")
+        assertThat(mediaUri!!).isNotNull()
+        assertThrows(SecurityException::class.java) {
+            MediaStoreCompat.openOutputStream(
+                context, mediaUri
+            )
+        }
+        grantMediaOrStoragePermission(Manifest.permission.READ_MEDIA_AUDIO)
+        grantMediaOrStoragePermission(Manifest.permission.READ_MEDIA_IMAGES)
+        assertThrows(SecurityException::class.java) {
+            MediaStoreCompat.openOutputStream(
+                context, mediaUri
+            )
+        }
+        var token = MediaStoreCompat.needRequestBytesWrite(context, mediaUri)
+        assertThat(token).isNotNull()
+        assertThat(token!!.requestManager).isFalse()
+        assertThat(token.uri).isEqualTo(mediaUri.toString())
+        assertThrows(SecurityException::class.java) {
+            MediaStoreCompat.openOutputStream(
+                context, mediaUri
+            )
+        }
+        assertResultOfWriteRequest(context, token, Activity.RESULT_OK) {
+            answerWriteRequest(true)
+        }
+        token = MediaStoreCompat.needRequestBytesWrite(context, mediaUri)
+        assertThat(token).isNull()
+        context.contentResolver.update(mediaUri, ContentValues().apply {
+            put(MediaStore.Files.FileColumns.IS_PENDING, 1)
+            put("format", 0x3001)
+        }, null, null)
+        context.contentResolver.update(mediaUri, ContentValues().apply {
+            put(MediaStore.Files.FileColumns.DISPLAY_NAME, "music.jpg")
+            put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+            put("format", 0x3001)
+        }, null, null)
+    }
+
+    @Test
+    fun testWrongFolderCreateThrough3001Bug() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val mediaUri = context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
+            put(MediaStore.Files.FileColumns.DISPLAY_NAME, "music.mp3")
+            put(MediaStore.Files.FileColumns.IS_PENDING, 1)
+            put("format", 0x3001)
+        })!!
+        context.contentResolver.openOutputStream(mediaUri)!!.close()
+        context.contentResolver.update(mediaUri, ContentValues().apply {
+            put(MediaStore.Files.FileColumns.DISPLAY_NAME, "music.jpg")
+            put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+            put("format", 0x3001)
+        }, null, null)
     }
 
     @Test

@@ -2931,7 +2931,6 @@ object MediaStoreCompat {
      */
     @JvmStatic
     @JvmOverloads
-    // TODO: can i do format 0x3001 trick on modern android to move files where they don't belong?
     fun efficientMove(context: Context, uri: Uri, newPathAndName: String,
                       ownerPackageName: String? = null, mediaType: Int? = null,
                       isDownload: Boolean? = null, mediaFile: File? = null,
@@ -4018,7 +4017,6 @@ object MediaStoreCompat {
      */
     @JvmStatic
     @JvmOverloads
-    // TODO: can i do format 0x3001 trick on modern android to create files where they don't belong?
     fun create(context: Context, fileNameAndPath: String, volume: StorageVolumeCompat? = null,
                mimeType: String? = null, relatedUri: Uri? = null, isManager: Boolean? = null,
                volumesCache: List<StorageVolumeCompat>? = null,
